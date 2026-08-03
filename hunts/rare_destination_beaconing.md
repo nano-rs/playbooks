@@ -8,8 +8,12 @@ authored: 2026-07-30
 schedule: "0 4 * * *"
 timezone: "UTC"
 lookback_window: 24h
-required_source_types:
-  - squid_proxy
+telemetry:
+  one_of:
+    - network.web
+    - network.connection
+  optional:
+    - network.dns
 mitre_tactic: command-and-control
 mitre_technique: T1071.001
 budget:
