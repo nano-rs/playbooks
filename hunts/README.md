@@ -36,12 +36,20 @@ schedule: "0 3 * * *"
 timezone: "UTC"
 lookback_window: 24h
 
-# ATT&CK data sources are mapped to nano source types, and a hunt whose
-# required source is unhealthy is HELD rather than run partial — comparable
-# yield matters more than a result.
-required_source_types:
-  - windows_security
-  - squid_proxy
+# Describe what evidence the hunt needs, not what a customer happened to name
+# its source types. Recon maps these semantic capabilities to concrete source
+# names (for example `corp_okta_prod` -> `identity.authentication`).
+telemetry:
+  # Every capability in this group must resolve to a live source.
+  all_of:
+    - identity.authentication
+  # When present, at least one capability in this group must resolve.
+  one_of:
+    - network.web
+    - network.connection
+  # These improve the hunt but never hold a sweep.
+  optional:
+    - endpoint.process
 mitre_tactic: lateral-movement
 mitre_technique: T1021
 
@@ -58,6 +66,10 @@ budget:
 tags: [lateral-movement, rdp]
 ---
 ```
+
+`required_source_types` remains available for private, deployment-specific
+hunts that intentionally require an exact source name. Stock and portable hunts
+should use `telemetry` so customer naming does not become part of the contract.
 
 ## Step kinds
 

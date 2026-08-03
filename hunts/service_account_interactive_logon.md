@@ -8,8 +8,9 @@ authored: 2026-07-30
 schedule: "0 3 * * *"
 timezone: "UTC"
 lookback_window: 24h
-required_source_types:
-  - windows_security
+telemetry:
+  all_of:
+    - identity.authentication
 mitre_tactic: lateral-movement
 mitre_technique: T1078.002
 budget:
