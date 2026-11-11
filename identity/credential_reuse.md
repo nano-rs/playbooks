@@ -34,7 +34,7 @@ Agent-first identity investigation for the pattern **"account that shouldn't be 
 /query: last 30d of auth events for this user
   window: 30d
   from:   auth-events
-  where:  actor = {{entity.user}}
+  where:  class_uid = 3002 AND (user.name = {{entity.user}} OR actor.user.name = {{entity.user}})
   group:  by day
   note:   "looking for the silhouette of a live account vs a resurrected one"
 
@@ -60,13 +60,13 @@ Agent-first identity investigation for the pattern **"account that shouldn't be 
 /query: every action taken by this actor in the last 24h
   window: 24h
   from:   cloudtrail
-  where:  userIdentity.userName = {{entity.user}}
-  show:   eventTime, eventName, resources, sourceIPAddress
+  where:  class_uid = 6003 AND actor.user.name = {{entity.user}}
+  show:   timestamp, api.operation, resources.name, src_endpoint.ip
 
 /pivot: resources touched — did any succeed?
   from:   cloudtrail
-  where:  userIdentity.userName = {{entity.user}} AND errorCode = null
-  group:  by eventName
+  where:  class_uid = 6003 AND actor.user.name = {{entity.user}} AND status_id = 1
+  group:  by api.operation
 
 /enrichment: source IP reputation
   services: greynoise, spur, ipinfo

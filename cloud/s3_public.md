@@ -27,7 +27,7 @@ tags:
 /query: who made the change
   window: 24h
   from:   cloudtrail
-  where:  requestParameters.bucketName = {{entity.bucket}} AND eventName IN (PutBucketAcl, PutBucketPolicy)
+  where:  class_uid = 6003 AND resources.name = {{entity.bucket}} AND api.operation IN ("PutBucketAcl", "PutBucketPolicy")
 
 /decision: is public access intentional?
   options: [yes — static site / public CDN, no]

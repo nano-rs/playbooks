@@ -28,13 +28,13 @@ tags:
 /query: identical or near-identical messages in the last 24h
   window: 24h
   from:   mail-metadata
-  where:  subject ~ {{entity.subject}} OR sender = {{entity.sender}}
-  group:  by recipient
+  where:  email.subject = "*{{entity.subject}}*" OR email.from = {{entity.sender}}
+  group:  by email.to
 
 /pivot: who clicked the URL
   from:   proxy-logs
-  where:  url = {{entity.url}}
-  show:   user, ts, host
+  where:  class_uid = 4002 AND http_request.url.url_string = {{entity.url}}
+  show:   actor.user.name, timestamp, src_endpoint.ip, src_endpoint.hostname
 
 /decision: confirmed phish?
   options: [yes, no, marketing / unwanted but benign]

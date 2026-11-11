@@ -26,8 +26,9 @@ Suspected **MFA fatigue** (spam push until approve) or **token replay**. Run the
 /query: MFA events for this user in the last 4h
   window: 4h
   from:   idp-events
-  where:  user = {{entity.user}} AND event ~ /mfa/
-  show:   ts, event, device_id, ip, result
+  where:  class_uid = 3002 AND (user.name = {{entity.user}} OR actor.user.name = {{entity.user}})
+  show:   timestamp, activity_name, is_mfa, device.uid, src_endpoint.ip, status_id
+  note:   "MFA challenges and push responses are the rows where is_mfa = true"
 
 /enrichment: device trust posture
   system: okta

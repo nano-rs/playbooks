@@ -34,11 +34,11 @@ tags:
 /query: every process spawned by this host in the last hour
   window: 1h
   from:   edr-telemetry
-  where:  host = {{entity.host}}
+  where:  device.hostname = {{entity.host}}
 
 /pivot: lateral — any SMB or RDP from this host in 4h?
   from:   edr-network
-  where:  host = {{entity.host}} AND proto IN (smb, rdp)
+  where:  class_uid = 4001 AND device.hostname = {{entity.host}} AND dst_endpoint.port IN (445, 3389)
 
 /action: page on-call IR lead
   kind:   page.create

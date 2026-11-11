@@ -22,9 +22,9 @@ tags:
 /query: outbound bytes per destination in 24h
   window: 24h
   from:   network-flows
-  where:  src = {{entity.host}}
-  group:  by dst_domain
-  show:   bytes_out
+  where:  class_uid IN (4001, 4002) AND (device.hostname = {{entity.host}} OR src_endpoint.hostname = {{entity.host}})
+  group:  by dst_endpoint.hostname
+  show:   traffic.bytes_out
 
 /enrichment: destination reputation
   services: passivedns, whois

@@ -23,7 +23,7 @@ tags:
 /query: IAM policy changes by this actor in 24h
   window: 24h
   from:   cloudtrail
-  where:  userIdentity.arn = {{entity.actor}} AND eventName IN (AttachUserPolicy, AttachRolePolicy, CreatePolicy)
+  where:  class_uid = 6003 AND actor.user.uid = {{entity.actor}} AND api.operation IN ("AttachUserPolicy", "AttachRolePolicy", "CreatePolicy")
 
 /pivot: every principal that currently has the attached policy
   from:   iam-graph

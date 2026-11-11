@@ -22,8 +22,8 @@ tags:
 /query: DNS queries to this domain by entropy + length
   window: 12h
   from:   dns-logs
-  where:  qname ~ {{entity.domain}}
-  show:   qname, qlen, entropy
+  where:  class_uid = 4003 AND query.hostname = "*{{entity.domain}}"
+  show:   query.hostname, qlen, entropy
 
 /enrichment: domain metadata
   services: whois, passivedns

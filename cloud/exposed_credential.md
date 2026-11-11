@@ -29,12 +29,12 @@ tags:
 /query: every action this key has taken in 48h
   window: 48h
   from:   cloudtrail
-  where:  userIdentity.accessKeyId = {{entity.key_id}}
+  where:  class_uid = 6003 AND unmapped.user_identity.access_key_id = {{entity.key_id}}
 
 /pivot: source IPs for this key
   from:   cloudtrail
-  where:  userIdentity.accessKeyId = {{entity.key_id}}
-  group:  by sourceIPAddress
+  where:  class_uid = 6003 AND unmapped.user_identity.access_key_id = {{entity.key_id}}
+  group:  by src_endpoint.ip
 
 /decision: any activity from IPs not matching the owner's normal pattern?
   options: [yes, no]

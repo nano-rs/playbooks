@@ -22,8 +22,8 @@ tags:
 /query: outbound connections by interval
   window: 24h
   from:   network-flows
-  where:  src = {{entity.host}}
-  group:  by dst, interval
+  where:  class_uid = 4001 AND device.hostname = {{entity.host}}
+  group:  by dst_endpoint.ip, interval
   note:   "looking for tight jitter around a fixed period"
 
 /enrichment: TI on destination

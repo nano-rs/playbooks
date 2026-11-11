@@ -22,7 +22,8 @@ tags:
 /query: new scheduled tasks, services, run-keys in 7d
   window: 7d
   from:   edr-telemetry
-  where:  host = {{entity.host}} AND event IN (sch_task_create, service_create, reg_run_key)
+  where:  device.hostname = {{entity.host}} AND (class_uid IN (1006, 201004) OR (class_uid IN (201001, 201002) AND (reg_key.path = "*\\CurrentVersion\\Run*" OR reg_value.path = "*\\CurrentVersion\\Run*")))
+  note:   "1006 is Scheduled Job Activity, 201004 Windows Service Activity (service installs), 201001/201002 registry key/value changes"
 
 /review: compare against known-good baseline
 /decision: is the persistence mechanism legitimate?

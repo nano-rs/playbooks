@@ -229,9 +229,13 @@ All three are computable from the risk dataset. None of them are what "top risky
            has no timestamp of its own, and it cannot be cited as evidence for
            anything. Lead corroboration matches the entity against entities
            the server extracts from the logs rows the sweep cites — and it
-           reads real UDM columns (user, src_ip, dest_ip, src_host, dest_host,
-           file_hash, process_name, url, sender, recipient). Neither a risk
-           aggregate nor a findings row's risk_entity is among them. A lead
+           reads the OCSF entity fields (actor.user.name, user.name,
+           device.hostname, src_endpoint.hostname, dst_endpoint.hostname,
+           src_endpoint.ip, dst_endpoint.ip, device.ip, file.hashes.sha256,
+           process.file.hashes.sha256, process.name, actor.process.name,
+           file.path, file.name, http_request.url.url_string,
+           query.hostname). Neither a risk aggregate nor a findings row's
+           unmapped.risk_entity is among them. A lead
            evidenced from the risk dataset alone therefore fails corroboration
            and is discarded with nothing surfaced to anyone.
 
@@ -267,7 +271,7 @@ All three are computable from the risk dataset. None of them are what "top risky
 
 /lead: entities whose risk is broad, recent and new rather than merely large
   entity: host
-  note:   "Entity type must be one of the nine, and must match the UDM column
+  note:   "Entity type must be one of the nine, and must match the OCSF field
            the corroborating rows came from — see the translation note above.
 
            Evidence carries the breadth (which distinct rules, which distinct

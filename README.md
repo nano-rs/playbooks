@@ -71,7 +71,7 @@ Agent-first identity investigation for the pattern "account that shouldn't be ac
 /query: last 30d of auth events for this user
   window: 30d
   from:   auth-events
-  where:  actor = {{entity.user}}
+  where:  class_uid = 3002 AND (user.name = {{entity.user}} OR actor.user.name = {{entity.user}})
   group:  by day
 
 /decision: is this a live user account?
@@ -123,7 +123,7 @@ A step block looks like:
 /query: find other failed logins from this IP
   window: 24h
   from:   auth-events
-  where:  src_ip = {{entity.ip}} AND result = failure
+  where:  class_uid = 3002 AND status_id = 2 AND src_endpoint.ip = {{entity.ip}}
 ```
 
 The indented body is a YAML-ish param bag the renderer reads.
