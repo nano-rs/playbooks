@@ -26,14 +26,14 @@ Coordinated auth failures across users and tenants, usually from a rented botnet
 /query: spray shape — failures per /24 per user per minute
   window: 4h
   from:   auth-events
-  where:  result = failure
-  group:  by src_ip_24, user, minute
+  where:  class_uid = 3002 AND status_id = 2
+  group:  by src_endpoint.ip /24, user.name, minute
   limit:  200
 
 /pivot: any successes from the same source block
   from:   auth-events
-  where:  src_ip_24 IN {{entity.src_ip_24_set}} AND result = success
-  note:   "any row here is an immediate escalation"
+  where:  class_uid = 3002 AND status_id = 1 AND src_endpoint.ip IN {{entity.src_ip_24_set}}
+  note:   "any row here is an immediate escalation; the set holds CIDR blocks such as 203.0.113.0/24, which src_endpoint.ip matches directly"
 
 /enrichment: ASN + hosting reputation
   services: greynoise, asnlookup

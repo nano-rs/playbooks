@@ -23,11 +23,11 @@ tags:
 /query: every authenticated session from this host in 8h
   window: 8h
   from:   edr-network
-  where:  src = {{entity.host}} AND proto IN (smb, rdp, winrm)
+  where:  class_uid = 4001 AND device.hostname = {{entity.host}} AND dst_endpoint.port IN (445, 3389, 5985, 5986)
 
 /pivot: each destination host — what's been touched
   from:   edr-filesystem
-  where:  host IN {{entity.dst_hosts}} AND ts > {{event.ts}}
+  where:  class_uid = 1001 AND device.hostname IN {{entity.dst_hosts}} AND timestamp > {{event.ts}}
 
 /decision: are any of the destinations domain controllers or tier-0?
   options: [yes, no]

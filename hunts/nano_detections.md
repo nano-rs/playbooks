@@ -40,21 +40,25 @@ tags:
 
 /note: the findings stream and its field shape
   note:   "Detection output is searchable telemetry: nano writes every match
-           and alert back into the logs table with source_type='findings'.
-           Some fields are DIRECT columns and cheap to filter on — rule_id,
-           rule_name, severity, risk_score, risk_entity, plus `action`
-           (which carries signal_type: detection_match or alert) and `status`
-           (which mirrors severity). The rest live inside the `metadata`
-           JSON string and cost an extraction: rule_mode, mitre_tactics,
-           mitre_techniques, matched_event_count, origin_source_types,
-           realtime, raw_risk_score, risk_entity_field, risk_entity_type,
-           risk_factors, alert_id.
+           and alert back into the logs dataset as an OCSF Detection Finding
+           (class_uid 2004, metadata.log_source 'findings'). Some fields are
+           DIRECT columns and cheap to filter on — class_uid,
+           finding_info.title (the rule name), finding_info.uid (the rule
+           id), severity_id and severity, and metadata.uid (the alert id, set
+           only on alerts). The rest of nano's finding payload lives in the
+           `unmapped` object and costs an extraction: unmapped.signal_type,
+           unmapped.risk_entity, unmapped.risk_entity_type,
+           unmapped.risk_entity_field, unmapped.risk_score,
+           unmapped.raw_risk_score, unmapped.risk_factors, unmapped.rule_mode,
+           unmapped.mitre_tactics, unmapped.mitre_techniques,
+           unmapped.origin_source_types and unmapped.realtime. The matched
+           event count is the native `count` field.
 
-           Filter on the direct columns first and reach into metadata only
+           Filter on the direct columns first and reach into `unmapped` only
            to enrich a set already narrowed. A JSON extraction across 24h of
            findings is a full scan of the partition.
 
-           The `action` column splits the stream in two: detection_match is a
+           unmapped.signal_type splits the stream in two: detection_match is a
            rule matching, alert is a rule that matched AND raised an alert.
            Both are here, they are not duplicates of each other, and the
            difference is the rule's mode rather than the finding's importance."
@@ -80,12 +84,12 @@ tags:
 
 /query: the 24h finding population, by rule and by entity
   window: 24h
-  from:   findings
-  where:  source_type = "findings"
+  from:   logs
+  where:  class_uid = 2004
   note:   "Open on the census, not on a suspicion. Two distributions matter
-           and they answer different questions: count by rule_name tells you
-           which rules are loud, and count by risk_entity tells you which
-           entities are busy. The second is the one worth reading — loud
+           and they answer different questions: count by finding_info.title
+           tells you which rules are loud, and count by unmapped.risk_entity
+           tells you which entities are busy. The second is the one worth reading — loud
            rules are a tuning backlog, busy entities are the hunt.
 
            Note the shape of the day before going further. A single rule
@@ -100,10 +104,10 @@ tags:
            different rules is a story, and nothing in the engine ranks it that
            way because each rule scored its own match in isolation.
 
-           Rank by DISTINCT rule_id, never by finding count — the count is
-           dominated by whichever rule is loudest and will bury exactly the
-           entity you are looking for. Then pull mitre_tactics from metadata
-           for the surviving entities: convergence across distinct tactics
+           Rank by DISTINCT finding_info.uid (the rule id), never by finding
+           count — the count is dominated by whichever rule is loudest and
+           will bury exactly the entity you are looking for. Then pull
+           unmapped.mitre_tactics for the surviving entities: convergence across distinct tactics
            outranks convergence within one. Three rules that all fire on the
            same credential-access behaviour are three views of one event;
            credential-access plus discovery plus lateral-movement on one host
@@ -112,8 +116,8 @@ tags:
 
 /query: accumulated entity risk, for the entities convergence surfaced
   from:   risk
-  note:   "NOTE THE SWITCH: `risk` here is a DATASET, not a source_type. The
-           steps above read the logs dataset filtered to source_type='findings';
+  note:   "NOTE THE SWITCH: `risk` here is a DATASET, not a log source. The
+           steps above read the logs dataset filtered to class_uid=2004;
            this one targets the derived risk dataset directly. The valid
            dataset selectors are logs, spans, metrics and risk — `findings` is
            not one of them, so do not carry it over as a dataset name.
@@ -154,9 +158,9 @@ tags:
            behind it: the rule is good enough to have been promoted out of
            staging, and its matches are landing where only this sweep looks.
 
-           These are exactly the findings carrying action='detection_match'
-           with no corresponding alert, and reading rule_mode from metadata
-           confirms it. This is also the one place the alert/match split
+           These are exactly the findings carrying
+           unmapped.signal_type='detection_match' with no corresponding alert,
+           and reading unmapped.rule_mode confirms it. This is also the one place the alert/match split
            above is directly useful rather than merely a caveat: an entity
            whose profile is built from live-mode matches has a detection
            story that provably reached no queue.
@@ -185,7 +189,7 @@ tags:
            source that started misparsing at midnight can manufacture a
            convergence pattern out of nothing but bad field mapping.
 
-           Check origin_source_types on the findings before believing an
+           Check unmapped.origin_source_types on the findings before believing an
            entity: convergence that traces back to ONE source type is far
            more likely to be a parser regression than an intruder, because a
            real intruder leaves evidence in several telemetry streams at
@@ -215,20 +219,26 @@ tags:
            The second is mechanical, and it silently decides whether this
            sweep produces anything at all. A lead's entity is corroborated
            server-side against entities extracted from the logs rows cited as
-           evidence — and the extractor reads real UDM columns (user, src_ip,
-           dest_ip, src_host, dest_host, file_hash, process_name, url,
-           sender, recipient). It does NOT read `risk_entity`, which is the
-           only place a findings row carries its subject. A lead evidenced
-           purely by findings rows therefore fails corroboration and is
-           discarded without an error anyone sees. Cite the raw telemetry
-           rows where the entity appears in its own UDM column."
+           evidence — and the extractor reads the OCSF entity fields: users
+           from actor.user.name and user.name, hosts from device.hostname,
+           src_endpoint.hostname and dst_endpoint.hostname, IPs from
+           src_endpoint.ip, dst_endpoint.ip and device.ip, hashes from
+           file.hashes.sha256 and process.file.hashes.sha256, processes from
+           process.name, actor.process.name and process.cmd_line, files from
+           file.path and file.name, URLs from http_request.url.url_string,
+           and domains from http_request.url.hostname and query.hostname. It
+           does NOT read `unmapped.risk_entity`, which is the only place a
+           findings row carries its subject. A lead evidenced purely by
+           findings rows therefore fails corroboration and is discarded
+           without an error anyone sees. Cite the raw telemetry rows where
+           the entity appears in its own OCSF field."
 
 ## Emit
 
 /lead: entities whose 24h detection profile tells a story their individual rules could not
   entity: user
   note:   "Entity type follows the subject — user, host, ip, domain, hash,
-           process, url, file or email — and must match the UDM column the
+           process, url, file or email — and must match the OCSF field the
            corroborating evidence came from.
 
            Evidence carries the distinct rules that fired with their tactics
