@@ -30,7 +30,7 @@ pivots:
     query: 'class_uid=1007 activity_id=1 (process.cmd_line=*-enc* OR process.cmd_line=*-encodedcommand* OR process.cmd_line=*frombase64string* OR process.cmd_line=/\^.*\^.*\^/ OR process.cmd_line="*net use*/user:*" OR process.cmd_line=*runas* OR process.cmd_line=*-password* OR process.cmd_line="*password=*" OR process.cmd_line="*pwd=*" OR process.cmd_line="* /p:*") | stats count, dc(device.hostname) AS hosts, values(device.hostname) AS host_sample, values(process.cmd_line) AS cmd_lines by process.parent_process.name, process.name, actor.user.name | sort hosts, count | head 200'
   - name: removable_volume_activity
     role: discovery
-    query: '(class_uid=1001 file.path=/^[d-z]:\\/) OR (class_uid=1007 activity_id=1 process.file.path=/^[d-z]:\\/) | stats count, dc(file.path) AS files_written, values(file.path) AS file_sample, dc(process.file.path) AS executions, values(process.file.path) AS execution_sample by device.hostname, actor.user.name, class_uid | sort -files_written, -executions | head 200'
+    query: '(class_uid=1001 activity_id IN (1,3,5) file.path=/^[d-z]:\\/) OR (class_uid=1007 activity_id=1 process.file.path=/^[d-z]:\\/) | stats count, dc(file.path) AS files_written, values(file.path) AS file_sample, dc(process.file.path) AS executions, values(process.file.path) AS execution_sample by device.hostname, actor.user.name, class_uid | sort -files_written, -executions | head 200'
     scorer:
       method: zscore
       field: files_written

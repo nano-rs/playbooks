@@ -23,17 +23,9 @@ pivots:
   - name: service_ticket_bursts
     role: discovery
     query: 'class_uid=3002 (activity_id=4 OR metadata.event_code="4769") | eval failed=if(status_id==2,1,0) | stats count AS service_tickets, sum(failed) AS failures, dc(src_endpoint.ip) AS sources, values(src_endpoint.ip) AS source_ips, dc(dst_endpoint.hostname) AS dcs, min(timestamp) AS first_request, max(timestamp) AS last_request by user.name | where service_tickets >= 20 | sort -service_tickets | head 200'
-    scorer:
-      method: zscore
-      field: service_tickets
-      threshold: 3
   - name: tgt_requests_many_accounts
     role: discovery
     query: 'class_uid=3002 (activity_id=3 OR metadata.event_code="4768") src_endpoint.ip!="" | stats count AS tgt_requests, dc(user.name) AS accounts, values(user.name) AS account_sample, min(timestamp) AS first_request, max(timestamp) AS last_request by src_endpoint.ip | where accounts >= 5 | sort -accounts | head 100'
-    scorer:
-      method: zscore
-      field: accounts
-      threshold: 3
   - name: preauth_failure_spread
     role: discovery
     query: 'class_uid=3002 status_id=2 (activity_id=6 OR metadata.event_code="4771") | stats count AS preauth_failures, dc(user.name) AS accounts, values(user.name) AS account_sample by src_endpoint.ip | where accounts >= 5 | sort -accounts | head 100'

@@ -25,10 +25,6 @@ pivots:
   - name: stuffing_sources
     role: discovery
     query: "class_uid=3002 | eval failed=if(status_id==2,1,0), succeeded=if(status_id==1,1,0) | stats count AS attempts, sum(failed) AS failures, sum(succeeded) AS successes, dc(user.name) AS accounts, min(timestamp) AS first_seen, max(timestamp) AS last_seen by src_endpoint.ip | where accounts >= 10 AND failures >= 20 | sort -accounts | head 200"
-    scorer:
-      method: zscore
-      field: accounts
-      threshold: 3
   - name: landed_accounts
     role: discovery
     dataset: signals
@@ -36,10 +32,6 @@ pivots:
   - name: distributed_by_asn
     role: discovery
     query: "class_uid=3002 status_id=2 | stats count AS failures, dc(user.name) AS accounts, dc(src_endpoint.ip) AS source_ips by src_endpoint.autonomous_system.number, src_endpoint.autonomous_system.name | where source_ips >= 5 AND accounts >= 20 | sort -accounts | head 100"
-    scorer:
-      method: zscore
-      field: source_ips
-      threshold: 3
 budget:
   max_turns: 40
   max_tool_calls: 120

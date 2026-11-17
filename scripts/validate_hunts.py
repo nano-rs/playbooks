@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -62,11 +63,11 @@ UDM_FIELDS = {
     "src_ip", "dest_ip", "src_host", "dest_host", "src_port", "dest_port", "user",
     "process_name", "command_line", "parent_process_name", "parent_command_line",
     "process_hash", "file_hash", "file_action", "auth_type", "auth_result",
-    "event_id", "logon_type", "bytes_in", "bytes_out", "dvc_ip", "src_user",
-    "dest_user", "user_agent", "http_method", "status_code", "query_type",
+    "event_id", "bytes_in", "bytes_out", "dvc_ip", "src_user",
+    "dest_user", "user_agent", "http_method", "query_type",
     "enriched_src_country", "enriched_src_asn",
 }
-FIELD_TOKEN_RE = re.compile(r"(?<![\w.`\"'])([a-z_][a-z0-9_]*)(?=\s*(=|!=|<|>|\bIN\b| by\b|,|\)|$))", re.I)
+FIELD_TOKEN_RE = re.compile(r"(?<![\w.`\"'])([a-z_][a-z0-9_]*)(?=\s*(=|!=|<|>|\bIN\b|\bby\b|,|\)|\||$))", re.I)
 
 
 def fail(errors: list[str], file: str, message: str) -> None:
@@ -167,7 +168,8 @@ def check_events_query(name: str, q: str) -> list[str]:
 
 def warn_events_query(name: str, q: str) -> list[str]:
     warnings = []
-    if "class_uid" not in q:
+    search = strip_quoted(q).split("|", 1)[0]
+    if not re.search(r"\bclass_uid\s*(=|IN\b)", search, re.I):
         warnings.append(f"pivot `{name}` does not filter on class_uid; make sure it is cheap over the whole window")
     return warnings
 
@@ -233,8 +235,8 @@ def check_file(path: Path, errors: list[str]) -> list[dict]:
     if rw is not None and (not isinstance(rw, int) or not 1 <= rw <= 10):
         fail(errors, file, "risk_weight must be an integer 1..10")
     sev = fm.get("default_severity")
-    if sev is not None and str(sev).strip().lower() not in SEVERITIES:
-        fail(errors, file, f"default_severity must be one of {sorted(SEVERITIES)}")
+    if sev is not None and str(sev).strip().lower() not in SEVERITIES - {"critical"}:
+        fail(errors, file, "default_severity must be high, medium, low or info (critical is set in the product)")
     if "escalation_mode" in fm:
         fail(errors, file, "`escalation_mode` is chosen in the product, never by a file; remove it")
 
@@ -312,8 +314,12 @@ def live_compile(file: str, pivots: list[dict], errors: list[str]) -> None:
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            verdict = json.load(resp)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                verdict = json.load(resp)
+        except (urllib.error.URLError, ValueError) as e:
+            fail(errors, file, f"pivot `{p['name']}` could not be validated on {url}: {e}")
+            continue
         if not verdict.get("ok"):
             msgs = "; ".join(e.get("message", "") for e in verdict.get("errors", []))
             fail(errors, file, f"pivot `{p['name']}` does not compile: {msgs}")

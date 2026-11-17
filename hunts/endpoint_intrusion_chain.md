@@ -22,6 +22,9 @@ hypothesis: "An intrusion leaves a chain of individually explainable steps: an O
 risk_weight: 8
 default_severity: high
 pivots:
+  - name: endpoint_coverage
+    role: coverage
+    query: 'class_uid IN (1007, 1001, 4001, 3002, 4003) | stats count, dc(device.hostname) AS hosts by class_uid'
   - name: office_child_process
     role: discovery
     query: 'class_uid=1007 process.parent_process.name IN ("winword.exe","excel.exe","powerpnt.exe","outlook.exe") | stats count, min(timestamp) AS first_seen, max(timestamp) AS last_seen, values(actor.user.name) AS users, values(process.cmd_line) AS commands by device.hostname, process.parent_process.name, process.name | sort -count | head 200'
@@ -31,14 +34,14 @@ pivots:
       threshold: 2
   - name: encoded_powershell
     role: discovery
-    query: 'class_uid=1007 process.name IN ("powershell.exe","pwsh.exe") process.cmd_line=*enc* | stats count, min(timestamp) AS first_seen, max(timestamp) AS last_seen, dc(process.cmd_line) AS distinct_commands, values(actor.user.name) AS users by device.hostname, process.parent_process.name | sort -count | head 200'
+    query: 'class_uid=1007 process.name IN ("powershell.exe","pwsh.exe") process.cmd_line=/\s-(e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\s/ | stats count, min(timestamp) AS first_seen, max(timestamp) AS last_seen, dc(process.cmd_line) AS distinct_commands, values(actor.user.name) AS users by device.hostname, process.parent_process.name | sort -count | head 200'
     scorer:
       method: rare
       field: process.parent_process.name
       threshold: 2
   - name: rare_outbound_destinations
     role: discovery
-    query: 'class_uid=4001 | where isnotnull(dst_endpoint.ip) AND NOT is_private_ip(dst_endpoint.ip) | stats count, dc(src_endpoint.ip) AS sources, values(src_endpoint.ip) AS source_ips, values(src_endpoint.hostname) AS source_hosts, values(dst_endpoint.port) AS ports, sum(traffic.bytes_out) AS bytes_out by dst_endpoint.ip | where sources = 1 | sort -bytes_out | head 200'
+    query: 'class_uid=4001 | where is_public_ip(dst_endpoint.ip) | stats count, dc(src_endpoint.ip) AS sources, values(src_endpoint.ip) AS source_ips, values(src_endpoint.hostname) AS source_hosts, values(dst_endpoint.port) AS ports, sum(traffic.bytes_out) AS bytes_out by dst_endpoint.ip | where sources = 1 | sort -bytes_out | head 200'
     scorer:
       method: iqr
       field: bytes_out
@@ -46,17 +49,13 @@ pivots:
   - name: spray_then_success
     role: discovery
     query: 'class_uid=3002 | stats count, count(eval(status_id=2)) AS failures, count(eval(status_id=1)) AS successes, dc(user.name) AS accounts, values(dst_endpoint.hostname) AS targets, min(timestamp) AS first_seen, max(timestamp) AS last_seen by src_endpoint.ip | where failures >= 10 AND accounts >= 5 AND successes >= 1 | sort -accounts | head 200'
-    scorer:
-      method: zscore
-      field: accounts
-      threshold: 3
   - name: services_and_admin_shares
     role: discovery
-    query: '(class_uid=1007 process.parent_process.name="services.exe") OR (class_uid=1001 file.path CONTAINS "\\ADMIN$\\") | stats count, dc(device.hostname) AS hosts, values(device.hostname) AS host_sample, values(actor.user.name) AS users, values(process.cmd_line) AS commands by class_uid, process.name, file.path | where hosts <= 2 | sort +hosts, -count | head 200'
+    query: '(class_uid=1007 process.parent_process.name="services.exe") OR (class_uid=1001 activity_id IN (1,3,5,6) ((actor.process.name="system" file.path CONTAINS "\\windows\\" file.path=/\.(exe|dll|sys)$/) OR file.path CONTAINS "\\ADMIN$\\")) | stats count, dc(device.hostname) AS hosts, values(device.hostname) AS host_sample, values(actor.user.name) AS users, values(process.cmd_line) AS commands, min(timestamp) AS first_seen by class_uid, actor.process.name, process.name, file.path | where hosts <= 2 | sort +hosts, -count, actor.process.name, process.name, file.path | head 200'
   - name: dns_parent_domain_shape
     role: discovery
     dataset: signals
-    query: "SELECT parent_domain AS parent_domain, uniq(name) AS distinct_names, count() AS queries, countIf(qtype IN ('TXT', 'NULL')) AS txt_null_queries, round(txt_null_queries / queries, 3) AS txt_null_share, round(avg(length(name)), 1) AS avg_name_length, quantileExact(0.5)(length(lbl)) AS median_label_length, max(length(lbl)) AS max_label_length, round(avg(entropy), 3) AS label_entropy_bits, uniq(host_ip) AS source_ips, groupUniqArray(5)(host_name) AS source_hosts, groupUniqArray(5)(host_ip) AS source_ip_sample, countIf(detected) AS already_detected, min(ts) AS first_seen, max(ts) AS last_seen FROM (SELECT timestamp AS ts, id, `query.hostname` AS name, upper(`query.type`) AS qtype, `src_endpoint.ip` AS host_ip, `src_endpoint.hostname` AS host_name, cutToFirstSignificantSubdomain(`query.hostname`) AS parent_domain, splitByChar('.', `query.hostname`)[1] AS lbl, splitByString('', lbl) AS chars, arraySum(arrayMap(c -> -(c / length(lbl)) * log2(c / length(lbl)), arrayMap(ch -> countEqual(chars, ch), arrayDistinct(chars)))) AS entropy, id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')}) AS detected FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND class_uid = 4003 AND `query.hostname` != '') WHERE parent_domain != '' AND parent_domain != name GROUP BY parent_domain HAVING distinct_names >= 20 AND ((median_label_length >= 25) + (label_entropy_bits >= 4.0) + (txt_null_share >= 0.5)) >= 2 ORDER BY distinct_names DESC, parent_domain ASC"
+    query: "SELECT parent_domain AS parent_domain, uniq(name) AS distinct_names, count() AS queries, countIf(qtype IN ('TXT', 'NULL')) AS txt_null_queries, round(txt_null_queries / queries, 3) AS txt_null_share, round(avg(length(name)), 1) AS avg_name_length, quantileExact(0.5)(length(lbl)) AS median_label_length, max(length(lbl)) AS max_label_length, round(avg(entropy), 3) AS label_entropy_bits, uniq(host_ip) AS source_ips, groupUniqArray(5)(host_name) AS source_hosts, groupUniqArray(5)(host_ip) AS source_ip_sample, countIf(detected) AS already_detected, min(ts) AS first_seen, max(ts) AS last_seen FROM (SELECT timestamp AS ts, id, `query.hostname` AS name, upper(toString(event.query.type)) AS qtype, `src_endpoint.ip` AS host_ip, `src_endpoint.hostname` AS host_name, cutToFirstSignificantSubdomain(`query.hostname`) AS parent_domain, splitByChar('.', `query.hostname`)[1] AS lbl, splitByString('', lbl) AS chars, arraySum(arrayMap(c -> -(c / length(lbl)) * log2(c / length(lbl)), arrayMap(ch -> countEqual(chars, ch), arrayDistinct(chars)))) AS entropy, id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')}) AS detected FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND class_uid = 4003 AND activity_id = 1 AND `query.hostname` != '') WHERE parent_domain != '' AND parent_domain != name GROUP BY parent_domain HAVING distinct_names >= 20 AND ((median_label_length >= 25) + (label_entropy_bits >= 4.0) + (txt_null_share >= 0.5)) >= 2 ORDER BY distinct_names DESC, parent_domain ASC LIMIT 200"
 budget:
   max_turns: 40
   max_tool_calls: 60
@@ -85,7 +84,7 @@ twin; the chain on one entity does not.
 ## Credential access and lateral movement
 
 /pivot: many accounts failing from one source then one success; a service installed over an admin share
-  note:   "A spray ends in one success: that account is the next pivot. The spray_then_success pivot measures failures, successes and distinct accounts per source; services_and_admin_shares lists service children and ADMIN$ writes seen on at most two hosts."
+  note:   "A spray ends in one success: that account is the next pivot. The spray_then_success pivot measures failures, successes and distinct accounts per source; services_and_admin_shares lists services.exe children, executables the System process wrote under the Windows directory, and ADMIN$ paths, each seen on at most two hosts (file rows are grouped by the writer, actor.process.name)."
 
 ## Exfiltration
 

@@ -32,10 +32,6 @@ pivots:
   - name: service_stop_storm
     role: discovery
     query: 'class_uid=1007 ((process.name IN ("net.exe","net1.exe","sc.exe") process.cmd_line=*stop*) OR (process.name="sc.exe" process.cmd_line=*disabled*) OR process.name="taskkill.exe" OR (process.name IN ("powershell.exe","pwsh.exe") process.cmd_line=*stop-service*)) | stats count, dc(process.cmd_line) AS distinct_commands, min(timestamp) AS first_seen, max(timestamp) AS last_seen, values(actor.user.name) AS users, values(process.cmd_line) AS commands by device.hostname, process.parent_process.name | where distinct_commands >= 5 | sort -distinct_commands | head 200'
-    scorer:
-      method: zscore
-      field: distinct_commands
-      threshold: 3
   - name: security_tool_tamper
     role: discovery
     query: 'class_uid=1007 (process.cmd_line=*set-mppreference* OR process.cmd_line=*add-mppreference* OR process.cmd_line=*disablerealtimemonitoring* OR process.cmd_line=*disableantispyware* OR process.cmd_line=*disableioavprotection* OR process.cmd_line=*removedefinitions* OR process.cmd_line=*windefend* OR process.cmd_line=*wdfilter*) | stats count, min(timestamp) AS first_seen, max(timestamp) AS last_seen, values(actor.user.name) AS users, values(process.cmd_line) AS commands by device.hostname, process.parent_process.name, process.name | sort -count | head 200'

@@ -28,7 +28,7 @@ pivots:
     query: "class_uid=3006 activity_id IN (3, 4) | eval added=if(activity_id==3,1,0), removed=if(activity_id==4,1,0) | stats sum(added) AS adds, sum(removed) AS removes, dc(actor.user.name) AS actors, values(actor.user.name) AS actor_names, values(device.hostname) AS hosts, min(timestamp) AS first_change, max(timestamp) AS last_change by user.name | where adds >= 1 AND removes >= 1 | sort -adds | head 200"
   - name: gpo_and_tripwire_edits
     role: discovery
-    query: 'class_uid IN (0, 3002) (metadata.event_code IN ("4706","4707","4716","4739","4794","4865","4866","4867") OR (metadata.event_code IN ("5136","5137","5141") (raw_data CONTAINS "grouppolicycontainer" OR raw_data CONTAINS "adminsdholder"))) | stats count AS events, min(timestamp) AS first_seen, max(timestamp) AS last_seen by metadata.event_code, device.hostname | sort -events | head 100'
+    query: 'class_uid IN (0, 1008, 3002) (metadata.event_code IN ("4706","4707","4716","4739","4794","4865","4866","4867") OR (metadata.event_code IN ("5136","5137","5141") (raw_data CONTAINS "grouppolicycontainer" OR raw_data CONTAINS "adminsdholder"))) | stats count AS events, min(timestamp) AS first_seen, max(timestamp) AS last_seen by metadata.event_code, device.hostname | sort -events | head 100'
 budget:
   max_turns: 40
   max_tool_calls: 120

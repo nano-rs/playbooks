@@ -59,7 +59,7 @@ mitre_technique: T1021
 hypothesis: "Service accounts authenticate machine to machine. One logging on
   interactively (console, RDP, unlock) is a person holding its credentials."
 risk_weight: 6            # 1..10, scheduler priority (default 5)
-default_severity: high    # critical | high | medium | low | info (default medium)
+default_severity: high    # high | medium | low | info (default medium)
 pivots:
   - name: auth_coverage
     role: coverage
@@ -98,7 +98,7 @@ A file without `hypothesis` still imports: the product reads the subtitle, else 
 
 ### `pivots`
 
-Up to 12 per hunt (stock hunts use 1 to 4). Each pivot is a deterministic query the server runs over the sweep window, through the query guard, with **no model**. The investigator starts from their results.
+Up to 12 per hunt (stock hunts use 3 to 7). Each pivot is a deterministic query the server runs over the sweep window, through the query guard, with **no model**. The investigator starts from their results.
 
 | Key | Required | Meaning |
 |---|---|---|
@@ -113,7 +113,7 @@ Rules for every pivot:
 
 - **OCSF only.** nano stores events as OCSF. Use real `ocsf_logs` columns (`device.hostname`, `actor.user.name`, `process.cmd_line`, `src_endpoint.ip`, `dst_endpoint.port`, `api.operation`, `query.hostname` ...), never the legacy UDM names (`src_ip`, `user`, `command_line`, `event_id` ...). Field placement depends on the class: process, file and registry events name the host in `device.hostname` and the user in `actor.user.name`; authentication names the subject in `user.name` and the source in `src_endpoint.*`; API activity names the identity in `actor.user.name`.
 - **Filter on `class_uid` first**, then specific field predicates. Do not filter on customer `source_type` names in a stock hunt.
-- **Aggregate first.** A pivot hands the investigator at most 1,000 rows, so discovery pivots group by the entity (`stats ... by`), apply thresholds with `where`, and end in `sort` and `head`. A raw `table` of events is only acceptable behind a very selective filter, with `head`.
+- **Aggregate first.** A pivot reads at most 1,000 rows (its scorer sees all of them) and hands the investigator the first 200, and every pivot of a sweep draws on the same `budget.max_rows`. So discovery pivots group by the entity (`stats ... by`), apply thresholds with `where`, and end in `sort` (with a tiebreak key) and `head`. A raw `table` of events is only acceptable behind a very selective filter, with `head`. `signals` pivots end in `LIMIT`.
 - **Deterministic and cheap.** No `ai`, `inputlookup`, `join`, `append`, `transaction` or `sequence` commands, and nothing that depends on the wall clock: the server binds the sweep window.
 - nPL string comparisons are already case-insensitive. Write `process.name="powershell.exe"`; the compiler emits the indexed `lower(col)` form and puts the time bounds and every filter in one `WHERE`.
 
@@ -138,7 +138,7 @@ scorer:
   threshold: 2
 ```
 
-A scorer is computed in code over the pivot's rows, after the pivot runs, with no model. Use one only where a statistical outlier **is** the signal.
+A scorer is computed in code over the pivot's rows, after the pivot runs, with no model. Use one only where a statistical outlier **is** the signal, and score a population, not a list already cut by a threshold: the largest z-score n rows can produce is (n-1)/sqrt(n), so a `zscore` threshold of 3 needs at least 11 rows to ever flag one.
 
 | Method | Flags | `threshold` |
 |---|---|---|
@@ -153,11 +153,13 @@ A scorer is computed in code over the pivot's rows, after the pivot runs, with n
 | Key | Values | Default |
 |---|---|---|
 | `risk_weight` | 1 to 10: scheduler priority among due hunts | 5 |
-| `default_severity` | `critical`, `high`, `medium`, `low`, `info`: the severity floor of the hunt's findings; the reviewer may raise it, never lower it | `medium` |
+| `default_severity` | `high`, `medium`, `low`, `info`: the severity floor of the hunt's findings; the reviewer may raise it, never lower it | `medium` |
+
+A file cannot set `critical`: a critical floor would let every escalation through without the reviewer's confidence check, so an analyst raises a hunt to `critical` in the product.
 
 There is no `escalation_mode` key. Whether a hunt's escalations stay off, notify, or open cases is chosen in the product: every synced hunt starts at `notify`, and case mode unlocks only once the reviewer has a proven record on that hunt. Like enabling the hunt, it is a human decision, so the product ignores the key if a file sets it.
 
-These keys need nano 2.0.32 or later to take effect; earlier releases ignore them.
+Releases before 2.0.32 ignore these keys, and every synced hunt starts at the defaults there.
 
 ### Budget
 

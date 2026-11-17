@@ -29,21 +29,17 @@ pivots:
     dataset: signals
     query: "SELECT risk_entity, sum(risk_score) AS total_risk, uniqExact(rule_id) AS distinct_rules, count() AS fires, round(distinct_rules / fires, 3) AS breadth_ratio, sumIf(risk_score, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS risk_last_24h, round(risk_last_24h / greatest(total_risk, 1), 3) AS recent_share, uniqExact(source_type) AS origin_sources, groupUniqArray(10)(rule_name) AS rules, groupUniqArray(5)(severity) AS severities, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY distinct_rules DESC, total_risk DESC, risk_entity ASC LIMIT 200"
     scorer:
-      method: iqr
-      field: total_risk
-      threshold: 3
+      method: zscore
+      field: distinct_rules
+      threshold: 2
   - name: accelerating_entities
     role: discovery
     dataset: signals
     query: "SELECT risk_entity, sum(risk_score) AS total_risk, sumIf(risk_score, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS risk_last_24h, round(risk_last_24h / greatest(total_risk, 1), 3) AS recent_share, uniqExactIf(rule_id, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS distinct_rules_24h, uniqExact(rule_id) AS distinct_rules, countIf(timestamp < {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS prior_fires, uniqExact(source_type) AS origin_sources, groupUniqArray(10)(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity HAVING distinct_rules_24h >= 2 AND recent_share >= 0.5 ORDER BY distinct_rules_24h DESC, prior_fires ASC, risk_last_24h DESC, risk_entity ASC LIMIT 200"
-    scorer:
-      method: zscore
-      field: distinct_rules_24h
-      threshold: 2
   - name: top_risk_entity_events
     role: discovery
     dataset: signals
-    query: "SELECT id, timestamp, source_type, class_uid, `device.hostname`, `actor.user.name`, `user.name`, `src_endpoint.ip`, `dst_endpoint.ip`, `actor.process.cmd_line` FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity IN (SELECT risk_entity FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity HAVING uniqExact(rule_id) >= 2 ORDER BY sumIf(risk_score, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) DESC, risk_entity ASC LIMIT 10)) ORDER BY timestamp DESC LIMIT 200"
+    query: "SELECT id, timestamp, source_type, class_uid, `device.hostname`, `actor.user.name`, `user.name`, `src_endpoint.ip`, `dst_endpoint.ip`, `actor.process.cmd_line`, `process.name`, `process.cmd_line`, `query.hostname`, `api.operation` FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY AND id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity IN (SELECT risk_entity FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity HAVING uniqExact(rule_id) >= 2 ORDER BY sumIf(risk_score, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) DESC, risk_entity ASC LIMIT 10)) ORDER BY timestamp DESC LIMIT 200"
 
 budget:
   max_turns: 45
@@ -100,7 +96,8 @@ All three are computable from the signals source (risk_score and risk_entity per
   from:   signals
   note:   "The entity_risk_totals pivot already returns this population (up
            to 200 entities ranked by distinct rules, then total risk) and
-           flags total_risk outliers with an IQR fence.
+           z-scores distinct_rules (breadth, not total score, is the
+           signal; total score is the noise).
 
            Open on the whole population rather than the top N, because the
            top N is the part of this dataset with the least information in
@@ -154,8 +151,8 @@ All three are computable from the signals source (risk_score and risk_entity per
 /query: risk in the last 24h against risk over the week
   note:   "The accelerating_entities pivot already measures this: it keeps
            entities with two or more distinct rules in the last 24h AND at
-           least half of their week's risk in that day, and z-scores
-           distinct_rules_24h.
+           least half of their week's risk in that day (that threshold is
+           the signal; no statistical scorer is applied).
 
            Where within its week does an entity's risk sit? If
            risk_last_24h is a large share of total_risk (recent_share near
@@ -269,7 +266,8 @@ All three are computable from the signals source (risk_score and risk_entity per
            two, read the raw telemetry those signals matched on (their
            matched_log_id), and cite THOSE rows. The top_risk_entity_events
            pivot already returns the matched OCSF events for the ten
-           multi-rule entities with the most risk in the last 24h. Confirm the behavior independently while there — a
+           multi-rule entities with the most risk in the last 24h (events from that
+           same last day only). Confirm the behavior independently while there — a
            score is several rules' opinion, and this hunt is worth running
            only if it can tell the difference between an entity that behaved
            badly and an entity that rules agree about."

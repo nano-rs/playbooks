@@ -27,10 +27,6 @@ pivots:
   - name: campaign_bursts
     role: discovery
     query: 'class_uid=4009 | stats count, dc(email.to) AS recipients, values(email.to) AS recipient_list, min(timestamp) AS first_delivery, max(timestamp) AS last_delivery by email.from, email.subject | where recipients >= 10 | sort -recipients | head 200'
-    scorer:
-      method: zscore
-      field: recipients
-      threshold: 3
   - name: mail_shaped_execution
     role: discovery
     query: 'class_uid=1007 ((process.parent_process.name IN ("outlook.exe","winword.exe","excel.exe","powerpnt.exe","onenote.exe","msaccess.exe","mspub.exe") process.name IN ("wscript.exe","cscript.exe","mshta.exe","powershell.exe","pwsh.exe","cmd.exe","rundll32.exe","regsvr32.exe","msiexec.exe","certutil.exe","bitsadmin.exe","curl.exe","hh.exe")) OR process.file.path CONTAINS "\\content.outlook\\" OR process.cmd_line CONTAINS "\\content.outlook\\" OR process.file.path CONTAINS "\\inetcache\\" OR process.file.path CONTAINS "\\temp\\temp1_" OR process.file.path CONTAINS "\\temp\\rar$" OR process.file.path CONTAINS "\\temp\\7z") | stats count, min(timestamp) AS first_exec, max(timestamp) AS last_exec, values(process.cmd_line) AS commands by actor.user.name, device.hostname, process.parent_process.name, process.name | sort +first_exec | head 200'

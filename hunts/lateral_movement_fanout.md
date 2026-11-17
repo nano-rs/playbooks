@@ -25,7 +25,7 @@ pivots:
     query: 'class_uid IN (3002, 1007, 4001) | stats count by class_uid, source_type'
   - name: account_network_logon_fanout
     role: discovery
-    query: 'class_uid=3002 status_id=1 logon_type_id IN (3, 10) dst_endpoint.hostname=* | stats dc(dst_endpoint.hostname) AS target_hosts, count AS logons, values(dst_endpoint.hostname) AS targets, values(logon_type_id) AS logon_types, min(timestamp) AS first_seen, max(timestamp) AS last_seen by user.name, src_endpoint.ip | where target_hosts >= 3 | sort -target_hosts | head 200'
+    query: 'class_uid=3002 activity_id=1 status_id=1 logon_type_id IN (3, 10) dst_endpoint.hostname=* | stats dc(dst_endpoint.hostname) AS target_hosts, count AS logons, values(dst_endpoint.hostname) AS targets, values(logon_type_id) AS logon_types, min(timestamp) AS first_seen, max(timestamp) AS last_seen by user.name, src_endpoint.ip | where target_hosts >= 3 | sort -target_hosts | head 200'
     scorer:
       method: zscore
       field: target_hosts

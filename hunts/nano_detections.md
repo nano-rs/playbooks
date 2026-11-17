@@ -19,7 +19,7 @@ telemetry:
     - endpoint.process
     - network.connection
 
-hypothesis: "Every detection in the window was scored once, by a rule that could only see its own matches. Several DIFFERENT rules converging on one entity, a high or critical rule that fired only a handful of times under a flood of louder ones, or a matched event behind the busiest entities that tells a multi-stage story is what no single rule could rank. The benign twin is a scanner, a service account or one misparsing source tripping many rules at once; one loud rule firing a hundred times is tuning work, not a hunt result."
+hypothesis: "Every detection in the window was scored once, by a rule that could only see its own matches. Several DIFFERENT rules converging on one entity, a high or critical rule that fired only a handful of times under a flood of louder ones, or a matched event behind the most convergent entities that tells a multi-stage story is what no single rule could rank. The benign twin is a scanner, a service account or one misparsing source tripping many rules at once; one loud rule firing a hundred times is tuning work, not a hunt result."
 risk_weight: 6
 default_severity: medium
 pivots:
@@ -30,7 +30,7 @@ pivots:
   - name: signal_clusters
     role: discovery
     dataset: signals
-    query: "SELECT risk_entity, uniqExact(rule_id) AS distinct_rules, count() AS fires, countIf(severity IN ('low', 'info', 'informational')) AS low_fires, groupUniqArray(10)(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY distinct_rules DESC, fires DESC, risk_entity ASC"
+    query: "SELECT risk_entity, uniqExact(rule_id) AS distinct_rules, count() AS fires, countIf(severity IN ('low', 'info', 'informational')) AS low_fires, groupUniqArray(10)(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY distinct_rules DESC, fires DESC, risk_entity ASC LIMIT 200"
     scorer:
       method: zscore
       field: distinct_rules
@@ -42,7 +42,7 @@ pivots:
   - name: top_entity_events
     role: discovery
     dataset: signals
-    query: "SELECT id, timestamp, source_type, class_uid, `device.hostname`, `actor.user.name`, `src_endpoint.ip`, `dst_endpoint.ip`, `actor.process.cmd_line` FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity IN (SELECT risk_entity FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY uniqExact(rule_id) DESC, risk_entity ASC LIMIT 10)) ORDER BY timestamp DESC"
+    query: "SELECT id, timestamp, source_type, class_uid, `device.hostname`, `actor.user.name`, `src_endpoint.ip`, `dst_endpoint.ip`, `actor.process.cmd_line`, `process.name`, `process.cmd_line`, `user.name`, `query.hostname`, `api.operation` FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity IN (SELECT risk_entity FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY uniqExact(rule_id) DESC, risk_entity ASC LIMIT 10)) ORDER BY timestamp DESC LIMIT 200"
 
 budget:
   max_turns: 50
@@ -184,10 +184,8 @@ tags:
 
            The signals source has no rule-mode column: read the mode from the
            rule definitions of the rules the census lists, and treat rows from
-           live-mode rules as the unwatched set. This is also the one place
-           the alert/match split above is directly useful rather than merely
-           a caveat: an entity
-           whose profile is built from live-mode matches has a detection
+           live-mode rules as the unwatched set. An entity whose profile is
+           built from live-mode matches has a detection
            story that provably reached no queue.
 
            A high or critical severity live-mode finding on an entity that
