@@ -13,6 +13,23 @@ telemetry:
     - endpoint.process
 mitre_tactic: persistence
 mitre_technique: T1505.003
+hypothesis: "When a database engine, web worker or app server spawns a shell, the lineage alone convicts nobody: many applications shell out by design. The discriminator is the command content. Machine-generated children are repetitive and parameterized (few distinct command lines, recurring for months); a webshell or xp_cmdshell session explores (whoami, hostname, net user, dir sweeps, ping -n 1 canaries, base64 blobs, output redirected into the webroot) and varies between consecutive commands. The benign twin is a scheduled DBA or monitoring job that is odd-looking but identical across runs."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: service_parent_census
+    role: coverage
+    query: 'class_uid=1007 activity_id=1 process.parent_process.name IN ("sqlservr.exe","w3wp.exe","tomcat.exe","tomcat8.exe","tomcat9.exe","java.exe","javaw.exe","httpd.exe","nginx.exe","php-cgi.exe","php.exe","node.exe","umworkerprocess.exe","msexchangemailboxreplication.exe","httpd","nginx","apache2","php-fpm","java","node") | stats count, dc(device.hostname) AS hosts, dc(process.name) AS child_binaries by process.parent_process.name'
+  - name: service_shell_children
+    role: discovery
+    query: 'class_uid=1007 activity_id=1 process.parent_process.name IN ("sqlservr.exe","w3wp.exe","tomcat.exe","tomcat8.exe","tomcat9.exe","java.exe","javaw.exe","httpd.exe","nginx.exe","php-cgi.exe","php.exe","node.exe","umworkerprocess.exe","msexchangemailboxreplication.exe","httpd","nginx","apache2","php-fpm","java","node") process.name IN ("cmd.exe","powershell.exe","pwsh.exe","wscript.exe","cscript.exe","mshta.exe","certutil.exe","bitsadmin.exe","rundll32.exe","regsvr32.exe","whoami.exe","net.exe","net1.exe","ipconfig.exe","systeminfo.exe","hostname.exe","tasklist.exe","nltest.exe","quser.exe","ping.exe","sh","bash","dash","zsh","python","python3","perl","curl","wget","id","uname") | stats count, dc(process.cmd_line) AS distinct_cmds, dc(process.name) AS distinct_binaries, values(process.cmd_line) AS cmd_lines, earliest(timestamp) AS first_seen, latest(timestamp) AS last_seen by device.hostname, actor.user.name, process.parent_process.name | sort -distinct_cmds | head 200'
+    scorer:
+      method: iqr
+      field: distinct_cmds
+      threshold: 1.5
+  - name: service_exploratory_commands
+    role: discovery
+    query: 'class_uid=1007 activity_id=1 process.parent_process.name IN ("sqlservr.exe","w3wp.exe","tomcat.exe","tomcat8.exe","tomcat9.exe","java.exe","javaw.exe","httpd.exe","nginx.exe","php-cgi.exe","php.exe","node.exe","umworkerprocess.exe","msexchangemailboxreplication.exe","httpd","nginx","apache2","php-fpm","java","node") (process.name IN ("whoami.exe","net.exe","net1.exe","ipconfig.exe","systeminfo.exe","hostname.exe","tasklist.exe","nltest.exe","quser.exe","id","uname") OR process.cmd_line=*whoami* OR process.cmd_line="*net user*" OR process.cmd_line="*net group*" OR process.cmd_line=*ipconfig* OR process.cmd_line=*systeminfo* OR process.cmd_line="*ping -n 1*" OR process.cmd_line=*-enc* OR process.cmd_line=*frombase64string* OR process.cmd_line=*certutil* OR process.cmd_line=*inetpub* OR process.cmd_line=*/etc/passwd* OR process.cmd_line="*uname -a*") | stats count, dc(process.cmd_line) AS distinct_cmds, values(process.cmd_line) AS cmd_lines, earliest(timestamp) AS first_seen, latest(timestamp) AS last_seen by device.hostname, actor.user.name, process.parent_process.name, process.name | sort -distinct_cmds, first_seen | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -39,7 +56,10 @@ That deliberate choice is the whole design: `lolbin_unusual_parent` would miss a
            httpd/nginx workers, php-fpm, node, exchange worker processes.
            Take ALL their cmd/powershell/script-host children — do not
            pre-filter on rarity, that is precisely the mistake this hunt
-           exists to avoid."
+           exists to avoid. The `service_shell_children` pivot collects them
+           per host, account and service parent, with the distinct command
+           count (an IQR outlier on that count is flagged) and the command
+           lines verbatim."
 
 ## Judge the words, not the edge
 
@@ -50,7 +70,12 @@ That deliberate choice is the whole design: `lolbin_unusual_parent` would miss a
            directories, ping -n 1 canaries, output appended to files under
            the webroot, base64 blobs, and variation between consecutive
            commands. One interactive-looking command is interesting; a
-           conversation of them under one worker process is the finding."
+           conversation of them under one worker process is the finding.
+           The `service_exploratory_commands` pivot lists the children whose
+           binary or command line carries a discovery verb or encoding
+           marker. A verb run by a grandchild (cmd.exe under w3wp running
+           whoami) shows under cmd.exe, not w3wp: follow the cmd.exe rows
+           down by hand."
 
 /baseline: each service process's own command history
   window: 30d

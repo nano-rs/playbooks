@@ -15,6 +15,26 @@ telemetry:
     - cloud.control_plane
 mitre_tactic: execution
 mitre_technique: T1609
+hypothesis: "Cluster audit logs carry a few interesting verbs: a principal exec-ing or attaching into a pod, a pod created directly by a human instead of a controller, one principal reading many secrets across namespaces, and service-account tokens or cluster-wide role bindings minted to make access permanent. In a healthy cluster each is rare and attributable. The benign twins are platform engineers during incidents, CI minting tokens on deploy, and chart upgrades creating privileged pods through known controllers, all clustered around change windows and known principals."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: k8s_audit_census
+    role: coverage
+    query: 'class_uid=6003 api.service.name="kubernetes" | stats count, dc(actor.user.name) AS principals, dc(api.operation) AS operations by metadata.product.name | sort -count | head 20'
+  - name: exec_attach_and_direct_pods
+    role: discovery
+    query: 'class_uid=6003 api.service.name="kubernetes" (api.operation IN ("create pods/exec","get pods/exec","create pods/attach","get pods/attach","create pods/portforward") OR (api.operation="create pods" actor.user.name NOT STARTSWITH "system:")) | stats count, values(resources.name) AS pods, values(http_request.user_agent) AS user_agents, values(status) AS outcomes, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, api.operation, src_endpoint.ip | sort -count | head 200'
+  - name: secret_read_breadth
+    role: discovery
+    query: 'class_uid=6003 api.service.name="kubernetes" api.operation IN ("get secrets","list secrets","watch secrets") | stats count AS secret_reads, dc(resources.name) AS distinct_secrets, values(api.operation) AS verbs by actor.user.name, src_endpoint.ip | sort -distinct_secrets, -secret_reads | head 200'
+    scorer:
+      method: zscore
+      field: distinct_secrets
+      threshold: 3
+  - name: token_and_rbac_grants
+    role: discovery
+    query: 'class_uid=6003 api.service.name="kubernetes" api.operation IN ("create serviceaccounts/token","create serviceaccounts","create clusterrolebindings","update clusterrolebindings","patch clusterrolebindings","create rolebindings","update rolebindings","patch rolebindings","create clusterroles","update clusterroles","patch clusterroles","escalate clusterroles","bind clusterroles") actor.user.name NOT STARTSWITH "system:node:" | stats count, values(resources.name) AS objects, values(status) AS outcomes, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, api.operation, src_endpoint.ip | sort -count | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -39,7 +59,7 @@ tags:
            into are usually their own team's. Rank: human into prod beats
            human into dev; a first-ever principal→namespace pairing beats a
            familiar one; a service account execing interactively beats
-           both, because service accounts do not have hands."
+           both, because service accounts do not have hands. The exec_attach_and_direct_pods pivot lists exec, attach and port-forward per principal, operation and source (api.operation reads like create pods/exec); namespace and TTY are not columns, read them from the raw event."
 
 ## Appetite for secrets
 
@@ -48,7 +68,7 @@ tags:
            MANY, fast, often just after gaining a new binding. Breadth per
            principal per hour is the measure, and crossing a namespace
            boundary is worth more than volume inside one. List-then-get
-           sequences are the classic harvest texture."
+           sequences are the classic harvest texture. The secret_read_breadth pivot counts distinct secret names read per principal."
 
 ## Node-escape shapes
 
@@ -58,7 +78,7 @@ tags:
            daemonsets, storage drivers) and they arrive via known
            controllers on known charts. A privileged pod created directly —
            kubectl run, no owning ReplicaSet or Helm release — by a human
-           or a workload identity is the version worth an analyst."
+           or a workload identity is the version worth an analyst. The request body (securityContext, hostPath) is not parsed into columns; exec_attach_and_direct_pods lists pods created by non-system principals, which is the created-directly half, so read the raw request for the escape options."
 
 ## Making it permanent
 
@@ -67,7 +87,7 @@ tags:
            bindings, and bindings granted TO recently created service
            accounts are in-cluster persistence — the RBAC mirror of the
            cloud persistence hunt's backdoor accounts. Weight by scope
-           (cluster over namespace) and by grantor rarity."
+           (cluster over namespace) and by grantor rarity. The token_and_rbac_grants pivot lists them per principal (node token requests excluded)."
 
 ## Attribution out of the cluster
 

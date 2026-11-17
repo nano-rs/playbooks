@@ -13,6 +13,22 @@ telemetry:
     - cicd.audit
 mitre_tactic: credential-access
 mitre_technique: T1552
+hypothesis: "CI holds the deploy credentials and secrets and runs whatever the repository tells it to, so an attacker with any write path widens it through the source-control audit trail: branch protection or rulesets removed (often dropped, pushed past and restored inside an hour), a self-hosted runner registered, deploy keys, app installs or tokens added, Actions secrets or workflow permissions changed by an identity that never touches CI. The benign twin is the platform team refactoring in sweeps across many repos and dependency bots on a schedule, both with stable authorship; the lead is the single-repo, single-author change that widens what CI can read or run."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: scm_audit_census
+    role: coverage
+    query: 'class_uid=6003 api.service.name IN ("GitHub","GitLab","Bitbucket","Azure DevOps") | stats count, dc(actor.user.name) AS actors, dc(api.operation) AS operations by api.service.name | sort -count | head 20'
+  - name: protection_rollbacks
+    role: discovery
+    query: 'class_uid=6003 (api.operation=protected_branch.* OR api.operation=repository_ruleset.* OR api.operation=*branch_protection*) | stats count, values(api.operation) AS operations, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, resources.name, src_endpoint.ip | sort -count | head 200'
+  - name: trusted_side_doors
+    role: discovery
+    query: 'class_uid=6003 (api.operation=*self_hosted_runner* OR api.operation=*runner_group* OR api.operation=*deploy_key* OR api.operation=personal_access_token.* OR api.operation IN ("public_key.create","integration_installation.create","integration_installation.repositories_added","oauth_application.create","oauth_authorization.create")) | stats count, values(resources.name) AS resources, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, api.operation, src_endpoint.ip | sort -count | head 200'
+  - name: ci_secret_and_permission_changes
+    role: discovery
+    query: 'class_uid=6003 (api.operation=*actions_secret* OR api.operation=*actions_variable* OR api.operation=environment.* OR api.operation=*workflow_permissions* OR api.operation=*actions_allowed*) | stats count, dc(api.operation) AS distinct_ops, values(api.operation) AS operations, values(resources.name) AS resources by actor.user.name, src_endpoint.ip | sort -count | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -42,7 +58,7 @@ tags:
            pinned hashes to floating tags. Weight by author: a workflow
            edit from an account that has never touched CI config, or via
            a token rather than a person, reads differently than the
-           platform team refactoring."
+           platform team refactoring. Workflow file diffs are repository content, not audit-log columns: read them from the repository. The ci_secret_and_permission_changes pivot lists Actions secret, variable, environment and workflow-permission changes per actor."
 
 /query: workflow runs that deviate from their own history
   note:   "The edit is intent; the run is action. Runs whose duration,
@@ -60,14 +76,14 @@ tags:
            hosts, registrations by unexpected identities, and runners
            appearing in repos that never had them deserve individual
            reading — the population changes rarely enough that each event
-           can afford it."
+           can afford it. The trusted_side_doors pivot lists runner, deploy-key, app-install, OAuth-app and token events per actor and operation."
 
 /query: deploy keys, app installations, and PAT scope against the org
   note:   "The durable side doors. New deploy keys with write on quiet
            repos, app installs demanding contents:write org-wide, and the
            PAT-minting shapes the OAuth hunt flags — cross-reference it
            rather than re-judging, and bring its verdicts into this
-           hunt's timeline when the same identity appears in both."
+           hunt's timeline when the same identity appears in both. Same pivot."
 
 ## Guardrails quietly lowered
 
@@ -77,7 +93,7 @@ tags:
            is someone arranging to move code without witnesses. The
            add-use-restore cycle matters here exactly as it does in the
            privileged-group hunt: protection dropped, a push, protection
-           restored inside an hour is a shape with no innocent author."
+           restored inside an hour is a shape with no innocent author. The protection_rollbacks pivot lists protected_branch.* and repository_ruleset.* operations per actor and repository with first and last times, so a destroy and re-create inside an hour shows in one row."
 
 ## Rule out the boring explanation
 

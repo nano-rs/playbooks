@@ -14,6 +14,22 @@ telemetry:
     - endpoint.file
 mitre_tactic: credential-access
 mitre_technique: T1003
+hypothesis: "Credential material on an endpoint (SAM / SYSTEM / SECURITY hives, ntds.dit, LSASS memory, browser credential stores, password files) is touched constantly by the OS, backup agents and security tools, and almost never by anything else. In telemetry the attack shows as reg save / esentutl / ntdsutil / shadow-copy pulls, LSASS opened by an unexpected process, browser credstore files touched by a non-browser, and keyboard-driven password hunting (findstr /si password, *.kdbx, unattend.xml). The benign twin is the same touch by a signed backup or security agent from its install path."
+risk_weight: 8
+default_severity: high
+pivots:
+  - name: endpoint_telemetry_census
+    role: coverage
+    query: 'class_uid IN (1007, 1001) | stats count, dc(device.hostname) AS hosts by class_uid, activity_id'
+  - name: hive_ntds_lsass_touches
+    role: discovery
+    query: 'class_uid=1007 ((process.name="reg.exe" process.cmd_line=*save* (process.cmd_line=*sam* OR process.cmd_line=*system* OR process.cmd_line=*security*)) OR process.cmd_line=*ntds.dit* OR process.name IN ("ntdsutil.exe","dsdbutil.exe","vssadmin.exe","diskshadow.exe","vshadow.exe") OR (process.name="esentutl.exe" process.cmd_line=*/vss*) OR process.cmd_line=*HarddiskVolumeShadowCopy* OR (process.cmd_line=*comsvcs* process.cmd_line=*minidump*) OR process.name IN ("procdump.exe","procdump64.exe","sqldumper.exe","createdump.exe","rdrleakdiag.exe") OR (activity_id=3 process.name="lsass.exe")) | stats count, earliest(timestamp) AS first_seen, latest(timestamp) AS last_seen, values(process.cmd_line) AS cmd_lines by device.hostname, actor.user.name, actor.process.name, actor.process.file.path, process.name | sort count | head 200'
+  - name: browser_credstore_touches
+    role: discovery
+    query: 'class_uid=1001 (file.path="*\Login Data*" OR file.path=*\Cookies* OR file.path="*\Local State*" OR file.path=*\key4.db* OR file.path=*\logins.json* OR file.path=*\cookies.sqlite* OR file.path="*\Web Data*") actor.process.name NOT IN ("chrome.exe","msedge.exe","firefox.exe","brave.exe","opera.exe","iexplore.exe","msedgewebview2.exe") | stats count, dc(file.path) AS files, values(file.path) AS file_sample by device.hostname, actor.user.name, actor.process.name, actor.process.file.path | sort -files | head 200'
+  - name: password_hunting_commands
+    role: discovery
+    query: 'class_uid=1007 activity_id=1 ((process.name="findstr.exe" (process.cmd_line=*pass* OR process.cmd_line=*pwd* OR process.cmd_line=*cred*)) OR process.cmd_line=*.kdbx* OR process.cmd_line=*unattend.xml* OR process.cmd_line=*sysprep.xml* OR process.cmd_line=*id_rsa* OR process.cmd_line=*web.config* OR process.cmd_line=*cpassword* OR process.cmd_line="*select-string*password*" OR process.cmd_line="*dir /s*pass*") | stats count, dc(process.cmd_line) AS distinct_commands, values(process.cmd_line) AS cmd_lines, earliest(timestamp) AS first_seen by device.hostname, actor.user.name, process.parent_process.name | sort -distinct_commands | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -36,7 +52,11 @@ tags:
            ntds.dit, dsdbutil snapshots. On domain controllers add the
            remote flavour: replication-request patterns from machines that
            are not domain controllers — the DCSync shape — which touch no
-           file at all."
+           file at all. The `hive_ntds_lsass_touches` pivot lists the
+           process side per host with the acting process and its path,
+           including Sysmon process-access (activity 3) events against
+           lsass.exe; DCSync replication requests are not in endpoint
+           telemetry and stay a manual check."
 
 /query: shadow-copy creation followed by file pulls from inside it
   note:   "The locked-file workaround: mount or create a shadow, then copy
@@ -51,13 +71,18 @@ tags:
            Browser credstores are the highest-yield, lowest-privilege
            target on any workstation — no admin required — and stealer
            malware goes here FIRST. Cookie-store reads deserve equal rank:
-           session theft outlives a password reset."
+           session theft outlives a password reset. The
+           `browser_credstore_touches` pivot lists non-browser processes
+           with file events on these stores; most EDRs record writes and
+           creates, not reads, so a missing read is not an absence."
 
 /query: password hunting in files and code
   note:   "findstr /si password, recursive greps for 'pwd=', dir sweeps for
            *.kdbx, unattend.xml, web.config, id_rsa. This is keyboard work,
            not tooling — it overlaps the command-line hunt's discovery
-           texture, and a host appearing in both is one story."
+           texture, and a host appearing in both is one story. The
+           `password_hunting_commands` pivot measures this per host and
+           user."
 
 ## The carve, verified
 

@@ -15,6 +15,30 @@ telemetry:
     - identity.authentication
 mitre_tactic: collection
 mitre_technique: T1213
+hypothesis: "Business SaaS (CRM, ITSM, HR, wiki, chat) leaks through its own front door: report exports, bulk downloads and API pulls performed with valid credentials by someone allowed to see records individually but with no business taking them wholesale, and new integrations whose first day is bulk reads. In the SaaS audit log that looks like one user or app with far more export or read calls, across more objects, than the rest of the population. The benign twins are BI service accounts, integration users, sales-ops quarter-end jobs and sandbox refreshes, which are few, named and periodic."
+risk_weight: 6
+default_severity: medium
+pivots:
+  - name: saas_audit_census
+    role: coverage
+    query: 'class_uid IN (6003, 6006) cloud.provider NOT IN ("AWS","GCP","Azure") api.service.name!="kubernetes" | stats count, dc(actor.user.name) AS users, dc(api.operation) AS operations by class_uid, metadata.product.name | sort -count | head 50'
+  - name: export_volume_per_user
+    role: discovery
+    query: 'class_uid=6003 cloud.provider NOT IN ("AWS","GCP","Azure") (api.operation=*export* OR api.operation=*download* OR api.operation=*report* OR api.operation=*bulk* OR api.operation=*dump*) | stats count AS exports, dc(api.operation) AS distinct_ops, dc(resources.name) AS distinct_objects, values(api.operation) AS operations, values(src_endpoint.ip) AS source_ips by actor.user.name, metadata.product.name | sort -exports | head 200'
+    scorer:
+      method: zscore
+      field: exports
+      threshold: 3
+  - name: api_read_volume
+    role: discovery
+    query: 'class_uid=6003 cloud.provider NOT IN ("AWS","GCP","Azure") api.service.name!="kubernetes" activity_id=2 | stats count AS reads, dc(resources.name) AS distinct_objects, dc(api.operation) AS distinct_ops by actor.user.name, metadata.product.name, http_request.user_agent | sort -reads | head 200'
+    scorer:
+      method: iqr
+      field: reads
+      threshold: 3
+  - name: integration_grants
+    role: discovery
+    query: 'class_uid=6003 cloud.provider NOT IN ("AWS","GCP","Azure") (api.operation=*oauth* OR api.operation=*integration* OR api.operation=*connected_app* OR api.operation=*app_install* OR api.operation=*app_approved* OR api.operation=*authorize* OR api.operation CONTAINS "connected app") | stats count, values(api.operation) AS operations, values(resources.name) AS apps, min(timestamp) AS first_seen by actor.user.name, metadata.product.name | sort -count | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -43,7 +67,7 @@ A note on age: this hunt is baseline-hungry, and a SaaS source with only weeks o
            tell that separates work from harvest is the ALL-COLUMNS,
            all-rows, no-filter export, because real work always filters.
            A first-ever exporter moving big is worth more than a chronic
-           exporter moving slightly bigger."
+           exporter moving slightly bigger. The export_volume_per_user pivot counts export, download, report and bulk operations per user and product; row counts and column selection are not columns, read them from the raw events."
 
 /query: API-based harvesting shapes
   note:   "The UI export has an API twin: bulk-query jobs, paginated
@@ -51,7 +75,7 @@ A note on age: this hunt is baseline-hungry, and a SaaS source with only weeks o
            everything rather than something. Attribute API volume to the
            credential behind it — a user token doing bulk work its human
            has never done in the UI, or a connected app suddenly reading
-           objects outside its historical scope."
+           objects outside its historical scope. The api_read_volume pivot counts read activity per user, product and user agent."
 
 ## The integration side door
 
@@ -61,7 +85,7 @@ A note on age: this hunt is baseline-hungry, and a SaaS source with only weeks o
            integration whose first day includes bulk reads of contacts,
            opportunities or cases is a harvester wearing an integration's
            clothes — legitimate integrations spend their first day on
-           metadata and test calls, not on the entire Account object."
+           metadata and test calls, not on the entire Account object. The integration_grants pivot lists OAuth, app-install and integration events per actor."
 
 ## Who, and when in their tenure
 

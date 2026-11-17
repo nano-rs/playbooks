@@ -13,11 +13,24 @@ telemetry:
     - backup.audit
 mitre_tactic: impact
 mitre_technique: T1490
+hypothesis: "Ransomware crews disable recovery at the backup platform before they encrypt: retention shortened, immutability or vault locks removed, backup plans and restore points deleted, usually in one session from one identity. In cloud and backup-product audit logs these calls are rare, heavy and almost never routine outside a change window. The benign twin is a storage team pruning retention under capacity pressure or a migration deleting jobs wholesale, which arrives from known identities with a ticket and never switches immutability off."
+risk_weight: 8
+default_severity: high
+pivots:
+  - name: backup_audit_census
+    role: coverage
+    query: 'class_uid=6003 (api.operation=*backup* OR api.operation=*recoverypoint* OR api.operation=*recoveryservices* OR api.operation=*dataprotection* OR api.operation=*snapshot* OR api.operation=*objectlock*) | stats count, dc(api.operation) AS operations, dc(actor.user.name) AS actors by cloud.provider, api.service.name | sort -count | head 50'
+  - name: backup_sabotage_operations
+    role: discovery
+    query: 'class_uid=6003 (api.operation IN ("DeleteRecoveryPoint","DeleteBackupVault","DeleteBackupPlan","DeleteBackupSelection","DeleteBackupVaultLockConfiguration","DeleteBackupVaultAccessPolicy","PutBackupVaultAccessPolicy","UpdateRecoveryPointLifecycle","UpdateBackupPlan","DisassociateRecoveryPoint","StopBackupJob","PutObjectLockConfiguration","PutBucketLifecycle","PutBucketLifecycleConfiguration","PutBucketVersioning","DeleteBucketReplication","DeleteSnapshot","DeleteDBSnapshot","DeleteDBClusterSnapshot","DeleteDBInstanceAutomatedBackup","v1.compute.snapshots.delete") OR api.operation=*recoveryservices*delete* OR api.operation=*recoveryservices*backupconfig/write* OR api.operation=*recoveryservices*backuppolicies/write* OR api.operation=*dataprotection*delete* OR api.operation=*dataprotection*backuppolicies/write* OR api.operation=*backupdr*delete*) | stats count, dc(api.operation) AS distinct_ops, values(api.operation) AS operations, values(resources.name) AS resources, values(status) AS outcomes, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, src_endpoint.ip, cloud.provider, cloud.account.uid | sort -distinct_ops, -count | head 200'
+  - name: backup_account_logons
+    role: discovery
+    query: 'class_uid=3002 (user.name=*backup* OR user.name=*veeam* OR user.name=*rubrik* OR user.name=*commvault* OR user.name=*cohesity* OR user.name=*veritas*) | stats count, dc(dst_endpoint.hostname) AS targets, values(dst_endpoint.hostname) AS target_hosts, values(logon_type_id) AS logon_types, values(status) AS outcomes by user.name, src_endpoint.ip, src_endpoint.hostname | sort -targets, -count | head 200'
 budget:
-  max_turns: 30
+  max_turns: 40
   max_tool_calls: 100
-  max_rows: 4000
-  max_wall_seconds: 600
+  max_rows: 5000
+  max_wall_seconds: 900
 tags:
   - data
   - backup
@@ -39,7 +52,7 @@ tags:
            can restore'. Legitimate frequency is quarterly at best —
            every event here can afford an individual reading, and a
            CLUSTER of them in one session is the finding regardless of
-           who the actor claims to be."
+           who the actor claims to be. The backup_sabotage_operations pivot already lists these calls (AWS Backup, S3 object lock, lifecycle and versioning, snapshot deletes, Azure Recovery Services and Data Protection, GCP Backup and DR) per actor, source IP and account."
 
 /query: job and restore-point deletions
   note:   "Deleted backup jobs, purged restore points, catalogs cleared.
@@ -47,7 +60,7 @@ tags:
            controllers, database servers and the backup server itself are
            the ones a crew clears first, because they are the ones a
            recovery needs first. Bulk deletion in tight sequence is the
-           storm shape, same as the endpoint hunt's service kills."
+           storm shape, same as the endpoint hunt's service kills. Same pivot: read distinct_ops and resources per actor."
 
 ## The console and its keys
 
@@ -72,7 +85,7 @@ tags:
            every host it protects. Interactive logons with it, or its use
            from hosts that are not backup infrastructure, is the
            service-account-interactive hunt's logic applied to the single
-           account whose theft matters most."
+           account whose theft matters most. The backup_account_logons pivot lists Authentication 3002 logons by backup-named accounts (backup, veeam, rubrik, commvault, cohesity, veritas) per source, with logon_type_id and target hosts."
 
 ## Rule out the boring explanation
 

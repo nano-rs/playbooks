@@ -13,6 +13,22 @@ telemetry:
     - identity.privilege_changes
 mitre_tactic: privilege-escalation
 mitre_technique: T1098
+hypothesis: "Domain privilege moves through a few writable objects (privileged group memberships, GPOs, trusts, AdminSDHolder), and an estate changes them rarely, through a small set of known administrators and a PAM service. An intruder changes them from wherever they landed and often reverts them within hours: a membership added and removed on the same principal inside the window, authored by a human account or an unfamiliar host, is the diagnostic shape. The benign twin is a JIT or PAM system that produces the same add-remove cycle from one known service identity."
+risk_weight: 7
+default_severity: medium
+pivots:
+  - name: group_change_census
+    role: coverage
+    query: "class_uid=3006 | stats count, dc(actor.user.name) AS actors, dc(user.name) AS members by activity_name, source_type"
+  - name: privileged_group_adds_by_actor
+    role: discovery
+    query: 'class_uid=3006 activity_id=3 (raw_data CONTAINS "admins" OR raw_data CONTAINS "administrators" OR raw_data CONTAINS "operators" OR raw_data CONTAINS "group policy creator") | stats count AS adds, dc(user.name) AS members_added, values(user.name) AS member_names, values(device.hostname) AS hosts, values(metadata.event_code) AS event_codes, min(timestamp) AS first_add, max(timestamp) AS last_add by actor.user.name | sort -adds | head 200'
+  - name: add_remove_cycles
+    role: discovery
+    query: "class_uid=3006 activity_id IN (3, 4) | eval added=if(activity_id==3,1,0), removed=if(activity_id==4,1,0) | stats sum(added) AS adds, sum(removed) AS removes, dc(actor.user.name) AS actors, values(actor.user.name) AS actor_names, values(device.hostname) AS hosts, min(timestamp) AS first_change, max(timestamp) AS last_change by user.name | where adds >= 1 AND removes >= 1 | sort -adds | head 200"
+  - name: gpo_and_tripwire_edits
+    role: discovery
+    query: 'class_uid IN (0, 3002) (metadata.event_code IN ("4706","4707","4716","4739","4794","4865","4866","4867") OR (metadata.event_code IN ("5136","5137","5141") (raw_data CONTAINS "grouppolicycontainer" OR raw_data CONTAINS "adminsdholder"))) | stats count AS events, min(timestamp) AS first_seen, max(timestamp) AS last_seen by metadata.event_code, device.hostname | sort -events | head 100'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -38,7 +54,8 @@ tags:
            quieter: Backup Operators, DNSAdmins, Server Operators, Account
            Operators, and additions to local Administrators on servers.
            Record WHO added, not just who was added; the actor is half the
-           judgment."
+           judgment. The privileged_group_adds_by_actor pivot lists these by
+           actor; the group name is not a column, so confirm it in raw_data."
 
 /query: add-use-remove cycles
   note:   "Membership granted, a logon or service touched under it, and the
@@ -47,7 +64,9 @@ tags:
            privilege systems produce exactly this shape from ONE known
            service identity; the same cycle authored by a human account,
            or by anything not on the PAM carve, is an intruder tidying up
-           after themselves. The cleanup is the confession."
+           after themselves. The cleanup is the confession. The add_remove_cycles
+           pivot measures adds and removes per member (actor.user.name
+           added user.name) in the window."
 
 ## Policy as a delivery vehicle
 
@@ -58,7 +77,8 @@ tags:
            payload: scheduled-task and script additions inside a policy
            edit are the shape that turns a policy object into a
            deployment tool. The editing account and the edit's source
-           host both belong in evidence."
+           host both belong in evidence. The gpo_and_tripwire_edits pivot
+           counts the GPO, AdminSDHolder and trust events by event code."
 
 /query: the heavyweight rarities — trust changes, AdminSDHolder edits, DSRM changes
   note:   "Each of these is nearly a tripwire on its own: new domain

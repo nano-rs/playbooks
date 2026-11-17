@@ -13,6 +13,33 @@ telemetry:
     - network.dns
 mitre_tactic: exfiltration
 mitre_technique: T1048.003
+hypothesis: "Data moved over DNS puts the payload in the query labels, so one parent domain collects hundreds or thousands of distinct, never-repeated, long, high-entropy subdomains, often TXT / NULL, and almost always from a single host. CDNs, AV cloud lookups, DNSBLs and telemetry SDKs also fan out under one domain, but their labels are short and templated and the whole estate queries them. The shape and the audience are measured deterministically here; the model only explains them."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: dns_census
+    role: coverage
+    query: 'class_uid=4003 | stats count, dc(src_endpoint.ip) AS sources, dc(query.hostname) AS names by source_type'
+  - name: dns_parent_domain_shape
+    role: discovery
+    dataset: signals
+    query: "SELECT parent_domain AS parent_domain, uniq(name) AS distinct_names, count() AS queries, countIf(qtype IN ('TXT', 'NULL')) AS txt_null_queries, round(txt_null_queries / queries, 3) AS txt_null_share, round(avg(length(name)), 1) AS avg_name_length, quantileExact(0.5)(length(lbl)) AS median_label_length, max(length(lbl)) AS max_label_length, round(avg(entropy), 3) AS label_entropy_bits, uniq(host_ip) AS source_ips, groupUniqArray(5)(host_name) AS source_hosts, groupUniqArray(5)(host_ip) AS source_ip_sample, countIf(detected) AS already_detected, min(ts) AS first_seen, max(ts) AS last_seen FROM (SELECT timestamp AS ts, id, `query.hostname` AS name, upper(`query.type`) AS qtype, `src_endpoint.ip` AS host_ip, `src_endpoint.hostname` AS host_name, cutToFirstSignificantSubdomain(`query.hostname`) AS parent_domain, splitByChar('.', `query.hostname`)[1] AS lbl, splitByString('', lbl) AS chars, arraySum(arrayMap(c -> -(c / length(lbl)) * log2(c / length(lbl)), arrayMap(ch -> countEqual(chars, ch), arrayDistinct(chars)))) AS entropy, id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')}) AS detected FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND class_uid = 4003 AND `query.hostname` != '') WHERE parent_domain != '' AND parent_domain != name GROUP BY parent_domain HAVING distinct_names >= 20 AND ((median_label_length >= 25) + (label_entropy_bits >= 4.0) + (txt_null_share >= 0.5)) >= 2 ORDER BY distinct_names DESC, parent_domain ASC"
+    scorer:
+      method: zscore
+      field: label_entropy_bits
+      threshold: 2
+  - name: dns_tunnel_candidate_queries
+    role: discovery
+    dataset: signals
+    query: "SELECT id, ts AS timestamp, host_name AS `src_endpoint.hostname`, host_ip AS `src_endpoint.ip`, name AS `query.hostname`, qtype AS `query.type`, parent_domain, length(lbl) AS label_length, detected AS already_detected FROM (SELECT timestamp AS ts, id, `query.hostname` AS name, upper(`query.type`) AS qtype, `src_endpoint.ip` AS host_ip, `src_endpoint.hostname` AS host_name, cutToFirstSignificantSubdomain(`query.hostname`) AS parent_domain, splitByChar('.', `query.hostname`)[1] AS lbl, splitByString('', lbl) AS chars, arraySum(arrayMap(c -> -(c / length(lbl)) * log2(c / length(lbl)), arrayMap(ch -> countEqual(chars, ch), arrayDistinct(chars)))) AS entropy, id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')}) AS detected FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND class_uid = 4003 AND `query.hostname` != '') WHERE parent_domain IN (SELECT parent_domain FROM (SELECT parent_domain AS parent_domain, uniq(name) AS distinct_names, count() AS queries, countIf(qtype IN ('TXT', 'NULL')) AS txt_null_queries, round(txt_null_queries / queries, 3) AS txt_null_share, round(avg(length(name)), 1) AS avg_name_length, quantileExact(0.5)(length(lbl)) AS median_label_length, max(length(lbl)) AS max_label_length, round(avg(entropy), 3) AS label_entropy_bits, uniq(host_ip) AS source_ips, groupUniqArray(5)(host_name) AS source_hosts, groupUniqArray(5)(host_ip) AS source_ip_sample, countIf(detected) AS already_detected, min(ts) AS first_seen, max(ts) AS last_seen FROM (SELECT timestamp AS ts, id, `query.hostname` AS name, upper(`query.type`) AS qtype, `src_endpoint.ip` AS host_ip, `src_endpoint.hostname` AS host_name, cutToFirstSignificantSubdomain(`query.hostname`) AS parent_domain, splitByChar('.', `query.hostname`)[1] AS lbl, splitByString('', lbl) AS chars, arraySum(arrayMap(c -> -(c / length(lbl)) * log2(c / length(lbl)), arrayMap(ch -> countEqual(chars, ch), arrayDistinct(chars)))) AS entropy, id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')}) AS detected FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND class_uid = 4003 AND `query.hostname` != '') WHERE parent_domain != '' AND parent_domain != name GROUP BY parent_domain HAVING distinct_names >= 20 AND ((median_label_length >= 25) + (label_entropy_bits >= 4.0) + (txt_null_share >= 0.5)) >= 2)) ORDER BY parent_domain ASC, `src_endpoint.hostname` ASC, timestamp DESC LIMIT 25 BY parent_domain, `src_endpoint.hostname`, `src_endpoint.ip`"
+  - name: dns_single_audience_throughput
+    role: discovery
+    dataset: signals
+    query: "SELECT parent_domain, uniq(name) AS distinct_names, count() AS queries, round(distinct_names / queries, 3) AS unique_name_share, sum(greatest(length(name) - length(parent_domain) - 1, 0)) AS label_bytes, uniq(host_ip) AS source_ips, groupUniqArray(3)(host_ip) AS source_ip_sample, groupUniqArray(3)(host_name) AS source_hosts, countIf(detected) AS already_detected, min(ts) AS first_seen, max(ts) AS last_seen FROM (SELECT timestamp AS ts, id, lower(`query.hostname`) AS name, `src_endpoint.ip` AS host_ip, `src_endpoint.hostname` AS host_name, cutToFirstSignificantSubdomain(lower(`query.hostname`)) AS parent_domain, id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')}) AS detected FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND class_uid = 4003 AND `query.hostname` != '') WHERE parent_domain != '' AND parent_domain != name GROUP BY parent_domain HAVING distinct_names >= 100 AND source_ips <= 2 ORDER BY label_bytes DESC, parent_domain ASC LIMIT 200"
+    scorer:
+      method: iqr
+      field: label_bytes
+      threshold: 3
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -33,14 +60,24 @@ tags:
 /query: per parent domain — distinct-subdomain count, query volume, label lengths
   window: 24h
   from:   dns_logs
-  note:   "Aggregate at the registered domain, not the FQDN, or the tunnel
+  note:   "The dns_single_audience_throughput pivot already measures this per
+           parent domain (cutToFirstSignificantSubdomain of query.hostname):
+           distinct names, queries, unique-name share, label bytes and source
+           count, kept only at 100+ distinct names from at most two sources.
+
+           Aggregate at the registered domain, not the FQDN, or the tunnel
            disperses into its own noise. The interesting extreme is
            thousands of distinct, never-repeated subdomains — every query a
            new label is data encoding, since caching makes repeats free and
            tunnels get no repeats."
 
 /query: label entropy and encoding texture on the high-fan-out set
-  note:   "Encoded payloads run long, character-dense and dictionary-free;
+  note:   "The dns_parent_domain_shape pivot already measures this (median
+           and max first-label length, label entropy in bits, TXT / NULL
+           share), and dns_tunnel_candidate_queries lists the matching
+           queries per source host.
+
+           Encoded payloads run long, character-dense and dictionary-free;
            hex and base32 have recognizable alphabets. Score entropy
            per-label and look at the DISTRIBUTION per domain — legitimate
            high-fan-out services (CDNs, telemetry) have structured,
@@ -51,7 +88,10 @@ tags:
 ## The attribution test
 
 /baseline: how many distinct hosts query each candidate domain
-  note:   "This is the discriminator that survives contact with reality.
+  note:   "Both shape pivots return source_ips for each domain; the
+           throughput pivot keeps only domains with one or two sources.
+
+           This is the discriminator that survives contact with reality.
            Antivirus cloud lookups, DNSBLs and telemetry domains max out
            every volume metric this hunt has — queried by the WHOLE estate.
            A domain with tunnel texture queried by exactly one host has an
