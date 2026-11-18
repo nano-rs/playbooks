@@ -41,8 +41,7 @@ pivots:
     query: 'severity IN ("high", "critical") | stats count AS fires, dc(risk_entity) AS entities, values(risk_entity) AS entity_sample, values(matched_log_id) AS matched_log_ids, min(timestamp) AS first_fire, max(timestamp) AS last_fire by rule_id, rule_name, severity, detection_path | where fires<=5 | eval is_critical=if(severity="critical", 1, 0) | sort -is_critical, fires, rule_name | head 200'
   - name: top_entity_events
     role: discovery
-    dataset: signals
-    query: "SELECT id, timestamp, source_type, class_uid, `device.hostname`, `actor.user.name`, `src_endpoint.ip`, `dst_endpoint.ip`, `actor.process.cmd_line`, `process.name`, `process.cmd_line`, `user.name`, `query.hostname`, `api.operation` FROM {events} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND id IN (SELECT matched_log_id FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity IN (SELECT risk_entity FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY uniqExact(rule_id) DESC, risk_entity ASC LIMIT 10)) ORDER BY timestamp DESC LIMIT 200"
+    query: 'id IN [dataset=signals risk_entity IN [dataset=signals risk_entity!="" | stats dc(rule_id) AS distinct_rules by risk_entity | sort -distinct_rules, risk_entity | head 10 | return risk_entity] | return matched_log_id] | table id, timestamp, source_type, class_uid, device.hostname, actor.user.name, user.name, src_endpoint.ip, dst_endpoint.ip, actor.process.cmd_line, process.name, process.cmd_line, query.hostname, api.operation | sort -timestamp | head 200'
 
 budget:
   max_turns: 50
