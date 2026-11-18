@@ -288,12 +288,14 @@ def check_file(path: Path, errors: list[str]) -> list[dict]:
             fail(errors, file, f"pivot `{name}` has an empty query")
         if len(q) > MAX_PIVOT_QUERY_CHARS:
             fail(errors, file, f"pivot `{name}` query exceeds {MAX_PIVOT_QUERY_CHARS} characters")
-        sql = bool(re.match(r"\s*(select|with)\s", q, re.I))
+        sql = bool(re.match(r"\s*(select|with)\b", q, re.I))
         if sql and dataset != "signals":
             problems = [f"pivot `{name}` must be nPL (only a legacy signals pivot may be SQL)"]
         elif sql:
             problems = check_signals_query(name, q)
             print(f"WARN  {file}: pivot `{name}` is legacy SQL; author it in nPL so analysts can read it")
+        elif re.match(r"\s*dataset=", q, re.I):
+            problems = [f"pivot `{name}` starts with a Search `dataset=` selector; set the `dataset:` field instead"]
         else:
             problems = check_npl_query(name, q, dataset)
         for problem in problems:

@@ -123,9 +123,9 @@ Every pivot is nPL, the same language and compiler as Search, so an analyst alwa
 
 - `events` (default): the event table, OCSF columns.
 - `signals`: every detection that fired in the sweep window, real-time and scheduled, one row each. Columns: `id`, `timestamp`, `rule_id`, `rule_name`, `severity` (lowercase), `risk_score`, `risk_entity`, `matched_log_id` (the matched event's `id`), `source_type`, `detection_path` (`realtime` or `scheduled`).
-- `risk`: the per-entity risk grain (decayed over trailing 24h / 7d windows). A risk pivot reads the entities whose latest finding falls inside the sweep window.
+- `risk`: the per-entity risk grain (decayed over trailing 24h / 7d windows anchored at the end of the sweep window). A risk pivot reads the entities whose latest finding falls inside the sweep window.
 
-The server compiles the pivot for its dataset and runs it through the same guard and table allowlist as every hunt query. An events pivot can still reach detections through a subsearch, for example `id IN [dataset=signals severity="high" | return matched_log_id]`, and every events pivot's rows come back with the detections their entities already triggered, so a pivot does not need its own "already detected" column.
+Do not start the query itself with `dataset=` (the Search spelling): the `dataset:` field picks the dataset, and import refuses the selector in the query. The server compiles the pivot for its dataset and runs it through the same guard and table allowlist as every hunt query. An events pivot can still reach detections through a subsearch, for example `id IN [dataset=signals severity="high" | return matched_log_id]`, and every events pivot's rows come back with the detections their entities already triggered, so a pivot does not need its own "already detected" column.
 
 nPL notes that matter for pivots:
 
