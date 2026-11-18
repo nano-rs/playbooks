@@ -19,6 +19,30 @@ telemetry:
     - endpoint.process
     - network.connection
 
+hypothesis: "Every detection in the window was scored once, by a rule that could only see its own matches. Several DIFFERENT rules converging on one entity, a high or critical rule that fired only a handful of times under a flood of louder ones, or a matched event behind the most convergent entities that tells a multi-stage story is what no single rule could rank. The benign twin is a scanner, a service account or one misparsing source tripping many rules at once; one loud rule firing a hundred times is tuning work, not a hunt result."
+risk_weight: 6
+default_severity: medium
+pivots:
+  - name: detection_census
+    role: coverage
+    dataset: signals
+    query: '* | stats count AS fires, dc(risk_entity) AS entities, values(severity) AS severities, sum(risk_score) AS total_risk, min(timestamp) AS first_fire, max(timestamp) AS last_fire by rule_name, detection_path | sort -fires, rule_name | head 200'
+  - name: signal_clusters
+    role: discovery
+    dataset: signals
+    query: 'risk_entity!="" | eval low=if(severity="low" OR severity="info" OR severity="informational", 1, 0) | stats dc(rule_id) AS distinct_rules, count AS fires, sum(low) AS low_fires, values(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire by risk_entity | sort -distinct_rules, -fires, risk_entity | head 200'
+    scorer:
+      method: zscore
+      field: distinct_rules
+      threshold: 2
+  - name: high_severity_low_volume
+    role: discovery
+    dataset: signals
+    query: 'severity IN ("high", "critical") | stats count AS fires, dc(risk_entity) AS entities, values(risk_entity) AS entity_sample, values(matched_log_id) AS matched_log_ids, min(timestamp) AS first_fire, max(timestamp) AS last_fire by rule_id, rule_name, severity, detection_path | where fires<=5 | eval is_critical=if(severity="critical", 1, 0) | sort -is_critical, fires, rule_name | head 200'
+  - name: top_entity_events
+    role: discovery
+    query: 'id IN [dataset=signals risk_entity IN [dataset=signals risk_entity!="" | stats dc(rule_id) AS distinct_rules by risk_entity | sort -distinct_rules, risk_entity | head 10 | return risk_entity] | return matched_log_id] | table id, timestamp, source_type, class_uid, device.hostname, actor.user.name, user.name, src_endpoint.ip, dst_endpoint.ip, actor.process.cmd_line, process.name, process.cmd_line, query.hostname, api.operation | sort -timestamp | head 200'
+
 budget:
   max_turns: 50
   max_tool_calls: 150
@@ -38,37 +62,30 @@ tags:
 
 ## Where the findings live
 
-/note: the findings stream and its field shape
-  note:   "Detection output is searchable telemetry: nano writes every match
-           and alert back into the logs dataset as an OCSF Detection Finding
-           (class_uid 2004, metadata.log_source 'findings'). Some fields are
-           DIRECT columns and cheap to filter on — class_uid,
-           finding_info.title (the rule name), finding_info.uid (the rule
-           id), severity_id and severity, and metadata.uid (the alert id, set
-           only on alerts). The rest of nano's finding payload lives in the
-           `unmapped` object and costs an extraction: unmapped.signal_type,
-           unmapped.risk_entity, unmapped.risk_entity_type,
-           unmapped.risk_entity_field, unmapped.risk_score,
-           unmapped.raw_risk_score, unmapped.risk_factors, unmapped.rule_mode,
-           unmapped.mitre_tactics, unmapped.mitre_techniques,
-           unmapped.origin_source_types and unmapped.realtime. The matched
-           event count is the native `count` field.
+/note: the detections source and its field shape
+  note:   "Detection output is read through the signals source, never by
+           filtering the event table yourself. It already unions the two
+           paths nano writes: real-time signals, and scheduled findings
+           (stored as OCSF Detection Finding rows, class_uid 2004, in
+           ocsf_logs). Every row has the same ten columns: id, timestamp,
+           rule_id, rule_name, severity (lowercase), risk_score,
+           risk_entity, matched_log_id (the id of the OCSF event the rule
+           matched), source_type (the origin source of that event) and
+           detection_path (realtime or scheduled).
 
-           Filter on the direct columns first and reach into `unmapped` only
-           to enrich a set already narrowed. A JSON extraction across 24h of
-           findings is a full scan of the partition.
-
-           unmapped.signal_type splits the stream in two: detection_match is a
-           rule matching, alert is a rule that matched AND raised an alert.
-           Both are here, they are not duplicates of each other, and the
-           difference is the rule's mode rather than the finding's importance."
+           detection_path is the only split the source carries. It tells
+           you which engine produced the row, not whether the rule raised
+           an alert: rule mode, MITRE mapping and alert state are not
+           columns here. All four pivots of this hunt read this source,
+           and top_entity_events joins matched_log_id back to the raw OCSF
+           events."
 
 /note: what this sweep can and cannot know about an alert
   note:   "HARD BOUNDARY, and the easiest thing in this playbook to get wrong.
            An alert has two halves living in two places. The FIRING is here in
-           the findings stream — its rule, severity, entity, risk score,
-           matched-event count, MITRE mapping and alert_id — and all of it is
-           readable.
+           the signals source (its rule, severity, entity, risk score,
+           detection path and the matched event it points at), and all of it
+           is readable.
 
            The LIFECYCLE is not. Whether an alert was acknowledged, who owns
            it, whether it was closed, and whether it was dispositioned true
@@ -84,11 +101,14 @@ tags:
 
 /query: the 24h finding population, by rule and by entity
   window: 24h
-  from:   logs
-  where:  class_uid = 2004
-  note:   "Open on the census, not on a suspicion. Two distributions matter
-           and they answer different questions: count by finding_info.title
-           tells you which rules are loud, and count by unmapped.risk_entity
+  from:   signals
+  note:   "The detection_census pivot already measures the first
+           distribution (fires, entities and severities per rule_name and
+           detection_path); signal_clusters measures the second.
+
+           Open on the census, not on a suspicion. Two distributions matter
+           and they answer different questions: count by rule_name
+           tells you which rules are loud, and count by risk_entity
            tells you which entities are busy. The second is the one worth reading — loud
            rules are a tuning backlog, busy entities are the hunt.
 
@@ -104,10 +124,16 @@ tags:
            different rules is a story, and nothing in the engine ranks it that
            way because each rule scored its own match in isolation.
 
-           Rank by DISTINCT finding_info.uid (the rule id), never by finding
-           count — the count is dominated by whichever rule is loudest and
-           will bury exactly the entity you are looking for. Then pull
-           unmapped.mitre_tactics for the surviving entities: convergence across distinct tactics
+           The signal_clusters pivot already ranks by distinct rule_id per
+           risk_entity and z-scores distinct_rules; its rows are the
+           convergence candidates.
+
+           Rank by DISTINCT rule_id, never by signal
+           count (the count is dominated by whichever rule is loudest and
+           will bury exactly the entity you are looking for). Then read the
+           surviving entities' rules for their MITRE tactics (the signals
+           source carries no tactic column, so take it from the rule
+           definitions): convergence across distinct tactics
            outranks convergence within one. Three rules that all fire on the
            same credential-access behaviour are three views of one event;
            credential-access plus discovery plus lateral-movement on one host
@@ -115,21 +141,18 @@ tags:
            should ever wake somebody."
 
 /query: accumulated entity risk, for the entities convergence surfaced
-  from:   risk
-  note:   "NOTE THE SWITCH: `risk` here is a DATASET, not a log source. The
-           steps above read the logs dataset filtered to class_uid=2004;
-           this one targets the derived risk dataset directly. The valid
-           dataset selectors are logs, spans, metrics and risk — `findings` is
-           not one of them, so do not carry it over as a dataset name.
+  from:   signals
+  note:   "Risk is not a separate table: it is the risk_score column of the
+           signals source, keyed by risk_entity. Sum it per entity over the
+           window for the entities convergence surfaced.
 
-           The risk dataset aggregates the decayed score per entity from this
-           same findings stream, so it answers a question the raw findings
-           cannot: is this entity's 24h activity a spike on a quiet baseline,
-           or the continuation of a slope that has been climbing for a week?
-           A climbing slope with new tactics on top is the strongest signal
-           this sweep can produce. Its windows are FIXED trailing 24h/7d
-           anchored at evaluation time — they do not follow the sweep's
-           lookback, so read them as given rather than trying to reshape them."
+           The question it answers is whether this entity's 24h activity is
+           a spike on a quiet baseline or the continuation of a slope that
+           has been climbing for a week. This hunt's window is 24h, so the
+           week-long slope belongs to the sibling playbook
+           hunts/nano_risky_entities.md, which sums the same column over 7d
+           and splits off the last 24h. A climbing slope with new tactics on
+           top is the strongest signal this sweep can produce."
 
 ## Novelty — first firings and first entities
 
@@ -158,11 +181,10 @@ tags:
            behind it: the rule is good enough to have been promoted out of
            staging, and its matches are landing where only this sweep looks.
 
-           These are exactly the findings carrying
-           unmapped.signal_type='detection_match' with no corresponding alert,
-           and reading unmapped.rule_mode confirms it. This is also the one place the alert/match split
-           above is directly useful rather than merely a caveat: an entity
-           whose profile is built from live-mode matches has a detection
+           The signals source has no rule-mode column: read the mode from the
+           rule definitions of the rules the census lists, and treat rows from
+           live-mode rules as the unwatched set. An entity whose profile is
+           built from live-mode matches has a detection
            story that provably reached no queue.
 
            A high or critical severity live-mode finding on an entity that
@@ -171,7 +193,11 @@ tags:
            behaviour was worth detecting, and then routed the answer nowhere."
 
 /query: critical and high severity findings with low volume
-  note:   "Severity and volume are inversely informative. The critical rule
+  note:   "The high_severity_low_volume pivot already lists every high or
+           critical rule that fired five times or fewer in the window, with
+           its entities and matched event ids.
+
+           Severity and volume are inversely informative. The critical rule
            that fired ONCE yesterday is the one that got buried under the
            medium-severity rule that fired nine thousand times, and a human
            scrolling an alert queue sorted by time will never reach it.
@@ -189,8 +215,8 @@ tags:
            source that started misparsing at midnight can manufacture a
            convergence pattern out of nothing but bad field mapping.
 
-           Check unmapped.origin_source_types on the findings before believing an
-           entity: convergence that traces back to ONE source type is far
+           Check the source_type column of the entity's signals (the origin
+           source of the matched event) before believing an entity: convergence that traces back to ONE source type is far
            more likely to be a parser regression than an intruder, because a
            real intruder leaves evidence in several telemetry streams at
            once. Convergence across origins is the version worth keeping."
@@ -214,7 +240,8 @@ tags:
            redacted when the origin source is restricted, and a sample is not
            the event set. Read the underlying telemetry for the entity across
            the window and confirm the behaviour actually looks the way the
-           rules asserted it does.
+           rules asserted it does. The top_entity_events pivot already reads
+           the matched OCSF events behind the ten most convergent entities.
 
            The second is mechanical, and it silently decides whether this
            sweep produces anything at all. A lead's entity is corroborated
@@ -227,9 +254,10 @@ tags:
            process.name, actor.process.name and process.cmd_line, files from
            file.path and file.name, URLs from http_request.url.url_string,
            and domains from http_request.url.hostname and query.hostname. It
-           does NOT read `unmapped.risk_entity`, which is the only place a
-           findings row carries its subject. A lead evidenced purely by
-           findings rows therefore fails corroboration and is discarded
+           does NOT read a signal's risk_entity (nor a class_uid 2004 finding
+           row's payload), which is the only place a detection carries its
+           subject. A lead evidenced purely by signal rows therefore fails
+           corroboration and is discarded
            without an error anyone sees. Cite the raw telemetry rows where
            the entity appears in its own OCSF field."
 
@@ -243,7 +271,7 @@ tags:
 
            Evidence carries the distinct rules that fired with their tactics
            and severities, the timeline across the window, the novelty facts
-           from the baseline step, the rule_mode of anything that fired
+           from the baseline step, the mode of any rule that fired
            unwatched, and the raw telemetry rows that corroborate the entity.
            State the convergence explicitly — which rules, which tactics, in
            what order — because the ordering IS the story, and a flat list of

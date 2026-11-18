@@ -13,6 +13,30 @@ telemetry:
     - cloud.data_plane
 mitre_tactic: exfiltration
 mitre_technique: T1537
+hypothesis: "Cloud-native exfiltration never crosses the network perimeter: a disk snapshot or image shared to a foreign account, a bucket or container policy flipped open, a burst of signed URLs or SAS tokens, and compute launched in bulk (mining) once a credential is fully owned. Each is a single API call in the control-plane audit log. The benign twin is the estate's small fixed set of legitimate targets (vendor support shares, known-public asset buckets, batch projects) and pipeline-authored infrastructure changes with a ticket."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: cloud_audit_census
+    role: coverage
+    query: 'class_uid=6003 cloud.provider IN ("AWS","GCP","Azure") | stats count, dc(api.operation) AS operations, dc(actor.user.name) AS actors by cloud.provider, cloud.account.uid | sort -count | head 100'
+  - name: snapshot_and_image_shares
+    role: discovery
+    query: 'class_uid=6003 (api.operation IN ("ModifySnapshotAttribute","ModifyImageAttribute","ModifyDBSnapshotAttribute","ModifyDBClusterSnapshotAttribute","CopySnapshot","v1.compute.snapshots.setIamPolicy","v1.compute.images.setIamPolicy","v1.compute.disks.setIamPolicy") OR api.operation=*snapshots/begingetaccess* OR api.operation=*disks/begingetaccess*) | stats count, values(resources.name) AS resources, values(status) AS outcomes, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, api.operation, src_endpoint.ip, cloud.account.uid | sort -count | head 200'
+  - name: storage_exposure_and_signing
+    role: discovery
+    query: 'class_uid=6003 (api.operation IN ("PutBucketPolicy","PutBucketAcl","PutObjectAcl","DeletePublicAccessBlock","DeleteBucketPublicAccessBlock","DeleteAccountPublicAccessBlock","PutBucketWebsite","storage.setIamPermissions","SignBlob","SignJwt") OR api.operation=*listservicesas* OR api.operation=*listaccountsas* OR api.operation=*storageaccounts/listkeys* OR api.operation=*containers/setacl*) | stats count, values(resources.name) AS resources, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, api.operation, src_endpoint.ip, cloud.account.uid | sort -count | head 200'
+    scorer:
+      method: zscore
+      field: count
+      threshold: 3
+  - name: compute_launch_bursts
+    role: discovery
+    query: 'class_uid=6003 (api.operation IN ("RunInstances","RequestSpotInstances","RequestSpotFleet","CreateFleet","RequestServiceQuotaIncrease","v1.compute.instances.insert","beta.compute.instances.insert","v1.compute.instances.bulkInsert") OR api.operation=*virtualmachines/write* OR api.operation=*virtualmachinescalesets/write*) | stats count AS launches, dc(cloud.region) AS regions, values(cloud.region) AS region_list, values(api.operation) AS operations by actor.user.name, cloud.provider, cloud.account.uid | sort -launches | head 200'
+    scorer:
+      method: zscore
+      field: launches
+      threshold: 3
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -39,7 +63,7 @@ tags:
            individually, and the receiving account identity is the most
            attributable artifact this whole category produces. Weight by
            what the disk WAS: a database volume's snapshot outranks a web
-           server's."
+           server's. The snapshot_and_image_shares pivot lists the share calls; the receiving account is a request parameter, not a column, so read it from the raw event."
 
 /query: storage access policy changes toward open
   note:   "Buckets and containers flipped to public or all-authenticated,
@@ -48,14 +72,14 @@ tags:
            staging a pickup, or an engineer about to cause the org's next
            disclosure. Rank by data sensitivity where tagging allows, and
            by whether the flip was followed by anonymous reads — a flip
-           that was USED is a different lead than a flip that waits."
+           that was USED is a different lead than a flip that waits. The storage_exposure_and_signing pivot lists policy, ACL and public-access-block calls plus SAS and signing calls per actor and operation."
 
 /query: signed-URL and SAS-token generation bursts
   note:   "Time-limited links are the polite way to move data to an
            unauthenticated pickup. Baseline per principal: applications
            mint them steadily by design; a human identity or an unusual
            service suddenly minting dozens against sensitive containers is
-           packaging for delivery."
+           packaging for delivery. Same pivot: its zscore on count flags the minting bursts."
 
 ## Compute that pays someone else
 
@@ -66,7 +90,7 @@ tags:
            of it. This is less about the money than the implication — a
            miner means a credential is fully compromised and its owner
            does not know yet. The same burst WITHOUT mining texture might
-           be worse; check what the instances actually do before labeling."
+           be worse; check what the instances actually do before labeling. The compute_launch_bursts pivot counts launches and distinct regions per actor and account; instance types are request parameters, not columns, so read them from the raw events of a flagged actor."
 
 ## Attribution back to hands
 

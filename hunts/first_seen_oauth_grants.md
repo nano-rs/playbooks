@@ -16,6 +16,19 @@ telemetry:
     - identity.authentication
 mitre_tactic: credential-access
 mitre_technique: T1528
+hypothesis: "Consent phishing and token theft skip the password: a user consents to an application, or an account mints a token or key, and the attacker walks in through the integration. In telemetry that is an admin-audit grant or token-creation event for an app that few users have touched, asking for broad scopes, often minutes after an odd sign-in. The benign twin is ordinary SaaS adoption: many users consenting to a known publisher over weeks."
+risk_weight: 7
+default_severity: medium
+pivots:
+  - name: admin_audit_census
+    role: coverage
+    query: "class_uid=6003 | stats count, dc(actor.user.name) AS actors, dc(api.operation) AS operations by api.service.name | sort -count | head 50"
+  - name: consent_grants_by_app
+    role: discovery
+    query: 'class_uid=6003 (api.operation CONTAINS "consent" OR api.operation CONTAINS "oauth2permissiongrant" OR api.operation CONTAINS "app role assignment" OR api.operation CONTAINS "add service principal" OR api.operation CONTAINS "oauth_application" OR api.operation CONTAINS "oauth_authorization" OR api.operation CONTAINS "oauth2.as.consent" OR api.operation="authorize") | stats count AS grant_events, dc(actor.user.name) AS consenting_users, values(actor.user.name) AS users, values(api.operation) AS operations, values(src_endpoint.ip) AS source_ips, min(timestamp) AS first_seen by resources.name, api.service.name | sort consenting_users, -grant_events | head 200'
+  - name: token_and_key_minting
+    role: discovery
+    query: 'class_uid=6003 (api.operation CONTAINS "personal_access_token" OR api.operation CONTAINS "deploy_key" OR api.operation CONTAINS "public_key.create" OR api.operation CONTAINS "oauth_access" OR api.operation CONTAINS "add service principal credentials" OR api.operation CONTAINS "update application" OR api.operation CONTAINS "certificates and secrets") | stats count AS events, values(api.operation) AS operations, dc(src_endpoint.ip) AS source_ips, values(src_endpoint.ip) AS source_ip_list, values(resources.name) AS targets, min(timestamp) AS first_seen by actor.user.name, api.service.name | sort -events | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -39,7 +52,10 @@ tags:
   note:   "First-seen for THIS tenant, not first-seen globally. Rank by scope
            appetite: offline_access, mail read, files read-all and
            full_access_as_app carry the hunt; a first-seen app asking for
-           openid and profile is barely worth the row it arrived in."
+           openid and profile is barely worth the row it arrived in.
+           The consent_grants_by_app pivot lists the window's grants per app
+           (resources.name) with consenting users; scopes are not a column,
+           so read them from the grant events (raw_data)."
 
 /query: token and PAT minting in source-control
   window: 24h
@@ -48,7 +64,8 @@ tags:
            authorizations against the org. Weight by scope breadth and by the
            account's history — a PAT with repo and org scope from an account
            that has never minted one, or minting from a new network, is the
-           source-control mirror of consent phishing."
+           source-control mirror of consent phishing.
+           The token_and_key_minting pivot lists these per actor."
 
 ## Judge the app and the moment
 

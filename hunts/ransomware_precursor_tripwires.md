@@ -15,11 +15,35 @@ telemetry:
     - endpoint.file
 mitre_tactic: impact
 mitre_technique: T1490
+hypothesis: "Between foothold and detonation, ransomware operators delete shadow copies, disable boot recovery and backup catalogs, stop the services holding file locks in a burst, and blind the AV. These commands have almost no legitimate authors outside the management, backup and imaging stack, which runs them orchestrated, fleet-wide, inside a change window and parented by its own agent. The attacker version comes from an interactive shell or an unexpected parent on one host, off schedule; parentage is the only carve, never command content."
+risk_weight: 8
+default_severity: high
+pivots:
+  - name: endpoint_process_coverage
+    role: coverage
+    query: 'class_uid=1007 | stats count, dc(device.hostname) AS hosts by source_type'
+  - name: recovery_sabotage
+    role: discovery
+    query: 'class_uid=1007 (process.cmd_line=*delete*shadows* OR process.cmd_line=*shadowcopy*delete* OR process.cmd_line=*resize*shadowstorage* OR process.cmd_line=*win32_shadowcopy* OR process.name="diskshadow.exe" OR process.cmd_line=*recoveryenabled*no* OR process.cmd_line=*ignoreallfailures* OR process.cmd_line=*delete*catalog* OR process.cmd_line=*delete*systemstatebackup*) | stats count, min(timestamp) AS first_seen, max(timestamp) AS last_seen, values(actor.user.name) AS users, values(process.cmd_line) AS commands by device.hostname, process.parent_process.name, process.name | sort -count | head 200'
+    scorer:
+      method: rare
+      field: process.parent_process.name
+      threshold: 2
+  - name: service_stop_storm
+    role: discovery
+    query: 'class_uid=1007 ((process.name IN ("net.exe","net1.exe","sc.exe") process.cmd_line=*stop*) OR (process.name="sc.exe" process.cmd_line=*disabled*) OR process.name="taskkill.exe" OR (process.name IN ("powershell.exe","pwsh.exe") process.cmd_line=*stop-service*)) | stats count, dc(process.cmd_line) AS distinct_commands, min(timestamp) AS first_seen, max(timestamp) AS last_seen, values(actor.user.name) AS users, values(process.cmd_line) AS commands by device.hostname, process.parent_process.name | where distinct_commands >= 5 | sort -distinct_commands | head 200'
+  - name: security_tool_tamper
+    role: discovery
+    query: 'class_uid=1007 (process.cmd_line=*set-mppreference* OR process.cmd_line=*add-mppreference* OR process.cmd_line=*disablerealtimemonitoring* OR process.cmd_line=*disableantispyware* OR process.cmd_line=*disableioavprotection* OR process.cmd_line=*removedefinitions* OR process.cmd_line=*windefend* OR process.cmd_line=*wdfilter*) | stats count, min(timestamp) AS first_seen, max(timestamp) AS last_seen, values(actor.user.name) AS users, values(process.cmd_line) AS commands by device.hostname, process.parent_process.name, process.name | sort -count | head 200'
+    scorer:
+      method: rare
+      field: process.parent_process.name
+      threshold: 2
 budget:
-  max_turns: 30
+  max_turns: 40
   max_tool_calls: 100
-  max_rows: 4000
-  max_wall_seconds: 600
+  max_rows: 5000
+  max_wall_seconds: 900
 tags:
   - endpoint
   - ransomware
@@ -42,7 +66,8 @@ The suggested cadence is four-hourly rather than nightly on purpose. Everything 
            delete verb. The legitimate authors are backup agents and
            imaging tools — carve by the PARENT being the known agent, not
            by the command looking routine. An interactive shell issuing
-           the identical command is the finding."
+           the identical command is the finding. The recovery_sabotage pivot
+           lists these commands per host and parent."
 
 /query: boot and backup configuration kills
   note:   "bcdedit recoveryenabled no / ignoreallfailures, wbadmin delete
@@ -58,7 +83,8 @@ The suggested cadence is four-hourly rather than nightly on purpose. Everything 
            STORM — many stops in a tight window, targeting exactly the
            services that hold big files — versus the patch-window shape
            where the same stops arrive orchestrated, fleet-wide, and
-           parented by the management stack."
+           parented by the management stack. The service_stop_storm pivot
+           counts distinct stop and kill commands per host and parent."
 
 ## Blinding the sensors
 
@@ -68,7 +94,8 @@ The suggested cadence is four-hourly rather than nightly on purpose. Everything 
            management tool does all of this legitimately during upgrades —
            parentage is again the entire carve. Verify the parent by signer
            and path, not by name; attackers know what the agent binary is
-           called."
+           called. The security_tool_tamper pivot lists these commands per
+           host and parent."
 
 ## Context that changes the clock
 

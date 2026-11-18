@@ -10,8 +10,21 @@ timezone: "UTC"
 lookback_window: 30d
 telemetry:
   all_of: []
+hypothesis: "The estate's telemetry is not what everyone believes it is: sources go quiet without anyone noticing, a live tail falls hours behind while backfills keep daily totals healthy, and load-bearing fields (host, user, process, source IP) stop being populated after an agent upgrade. A source a migration broke and a source an attacker switched off look the same from here, so a dark or hollowed-out feed is a lead, not just a ticket; a steady, fresh, well-populated source is the benign state."
+risk_weight: 3
+default_severity: low
+pivots:
+  - name: source_inventory_freshness
+    role: coverage
+    query: '* | stats count, dc(class_uid) AS classes, min(timestamp) AS first_event, max(timestamp) AS last_event by source_type | sort -count | head 200'
+  - name: daily_volume_by_source
+    role: discovery
+    query: '* | timechart span=1d count by source_type'
+  - name: load_bearing_field_coverage
+    role: discovery
+    query: '* | stats count, count(eval(isnotnull(device.hostname) OR isnotnull(src_endpoint.hostname))) AS with_host, count(eval(isnotnull(user.name) OR isnotnull(actor.user.name))) AS with_user, count(eval(isnotnull(process.name))) AS with_process, count(eval(isnotnull(src_endpoint.ip))) AS with_src_ip, count(eval(isnotnull(dst_endpoint.ip))) AS with_dst_ip by source_type, class_uid | sort +source_type, -count | head 200'
 budget:
-  max_turns: 30
+  max_turns: 40
   max_tool_calls: 100
   max_rows: 8000
   max_wall_seconds: 900
@@ -33,12 +46,13 @@ This is not a hunt for adversary behaviour, and the suggested monthly cadence is
   note:   "The volume trend matters more than the total. A source that halved
            three Tuesdays ago did not get quieter — something upstream broke or
            was changed, and every hunt reading it has been sweeping half an
-           estate since."
+           estate since. The daily_volume_by_source pivot measures this."
 
 /query: most recent event per source type
   note:   "Freshness, not volume. A source can show healthy daily totals from a
            backfill while its live tail is hours behind — and a hunt with a 24h
-           lookback reads the gap as calm."
+           lookback reads the gap as calm. The source_inventory_freshness pivot gives
+           the last event per source."
 
 ## Is the quiet real
 
@@ -54,7 +68,8 @@ This is not a hunt for adversary behaviour, and the suggested monthly cadence is
            and check that the fields the other hunts join on — hostname, user,
            process, source IP — are actually populated. A field that went null
            after an upgrade breaks every join downstream without raising any
-           error anywhere."
+           error anywhere. The load_bearing_field_coverage pivot counts
+           populated host, user, process and IP fields per source and class."
 
 ## Emit
 

@@ -14,6 +14,23 @@ telemetry:
     - cloud.control_plane
 mitre_tactic: persistence
 mitre_technique: T1098
+hypothesis: "An intruder who lands in a tenant spends the first quiet hour making eviction harder: a spare account granted a role, credentials added to an application, a federation or IdP trust changed, an exclusion added to conditional access, a trail, sink or diagnostic setting deleted. Every one of those is also routine admin work, so the tell is the actor (one who has never made that kind of change), the clustering (several hardening moves from one identity in one window) and the missing change context."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: admin_plane_census
+    role: coverage
+    query: 'class_uid=6003 | stats count, dc(actor.user.name) AS actors, dc(api.operation) AS operations by cloud.provider, metadata.product.name | sort -count | head 50'
+  - name: identity_plane_writes
+    role: discovery
+    query: 'class_uid=6003 (api.operation IN ("CreateUser","CreateLoginProfile","UpdateLoginProfile","CreateAccessKey","AttachUserPolicy","AttachRolePolicy","PutUserPolicy","PutRolePolicy","AddUserToGroup","UpdateAssumeRolePolicy","CreateSAMLProvider","UpdateSAMLProvider","CreateOpenIDConnectProvider","google.iam.admin.v1.CreateServiceAccount","google.iam.admin.v1.CreateServiceAccountKey","SetIamPolicy","Add user.","Add member to role.","Add service principal.","Add service principal credentials.","Set domain authentication.","Set federation settings on domain.") OR api.operation=*roleassignments/write* OR api.operation CONTAINS "conditional access" OR api.operation CONTAINS "federation" OR api.operation CONTAINS "certificates and secrets") | stats count, dc(api.operation) AS distinct_ops, values(api.operation) AS operations, values(resources.name) AS resources, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, src_endpoint.ip, cloud.provider | sort -distinct_ops, -count | head 200'
+    scorer:
+      method: zscore
+      field: distinct_ops
+      threshold: 2
+  - name: visibility_plane_writes
+    role: discovery
+    query: 'class_uid=6003 (api.operation IN ("DeleteTrail","StopLogging","UpdateTrail","PutEventSelectors","DeleteFlowLogs","DeleteDetector","UpdateDetector","DeleteConfigurationRecorder","StopConfigurationRecorder","DeleteDeliveryChannel","DisableSecurityHub","DeleteLogGroup","PutRetentionPolicy","DeleteSubscriptionFilter","google.logging.v2.ConfigServiceV2.DeleteSink","google.logging.v2.ConfigServiceV2.UpdateSink","google.logging.v2.ConfigServiceV2.UpdateBucket","google.logging.v2.ConfigServiceV2.CreateExclusion") OR api.operation=*diagnosticsettings/delete* OR api.operation=*diagnosticsettings/write*) | stats count, values(api.operation) AS operations, values(resources.name) AS resources, values(status) AS outcomes, min(timestamp) AS first_seen, max(timestamp) AS last_seen by actor.user.name, src_endpoint.ip, cloud.provider, cloud.account.uid | sort -count | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -36,13 +53,13 @@ tags:
            creation, credentials added to existing applications, federation
            and IdP trust changes, conditional-access edits — especially
            exclusions added to an existing policy, which is how you weaken CA
-           without the diff looking like a weakening."
+           without the diff looking like a weakening. The identity_plane_writes pivot lists these per actor (AWS IAM, GCP IAM, Azure role assignments, Entra role, credential, federation and conditional-access operations)."
 
 /query: visibility-plane writes
   note:   "Diagnostic settings deleted, audit sinks disabled or re-routed,
            retention shortened. Nobody hardens a foothold and leaves the
            cameras running. These are rarer and heavier than the identity
-           moves — in a quiet estate this query alone is nearly a tripwire."
+           moves — in a quiet estate this query alone is nearly a tripwire. The visibility_plane_writes pivot lists trail, flow-log, detector, config-recorder, log-sink and diagnostic-setting changes per actor."
 
 ## Judge the actor, not the event
 
@@ -57,7 +74,7 @@ tags:
   note:   "Real admin work is single-purpose: one ticket, one change. A session
            that creates an account, grants it a role, AND touches CA or
            logging inside an hour is doing eviction-resistance, and the
-           cluster is far stronger evidence than any member of it."
+           cluster is far stronger evidence than any member of it. identity_plane_writes already counts distinct operations per actor in the window (distinct_ops, zscore scored); check visibility_plane_writes for the same actor."
 
 /pivot: how the acting identity's session began
   note:   "Walk back to the sign-in behind the change. If the actor's own

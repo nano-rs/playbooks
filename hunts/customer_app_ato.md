@@ -15,6 +15,22 @@ telemetry:
     - network.waf
 mitre_tactic: credential-access
 mitre_technique: T1110.004
+hypothesis: "Credential stuffing against a login that works produces sources trying many accounts with few attempts each (the inverse of brute force), increasingly spread thin across an ASN to stay under per-IP limits, and a small number of successes inside that noise that are the compromised accounts. The benign twins are partners and aggregators that hit the login with machine rhythm but against their own accounts, and campaign-driven login spikes from new geographies."
+risk_weight: 7
+default_severity: medium
+pivots:
+  - name: auth_census
+    role: coverage
+    query: "class_uid=3002 | stats count, dc(user.name) AS accounts, dc(src_endpoint.ip) AS sources by source_type"
+  - name: stuffing_sources
+    role: discovery
+    query: "class_uid=3002 | eval failed=if(status_id==2,1,0), succeeded=if(status_id==1,1,0) | stats count AS attempts, sum(failed) AS failures, sum(succeeded) AS successes, dc(user.name) AS accounts, min(timestamp) AS first_seen, max(timestamp) AS last_seen by src_endpoint.ip | where accounts >= 10 AND failures >= 20 | sort -accounts | head 200"
+  - name: landed_accounts
+    role: discovery
+    query: 'class_uid=3002 src_endpoint.ip!="" | eval fail_user=if(status_id=2, user.name, "") | eventstats dc(fail_user) AS sprayed_accounts by src_endpoint.ip | where status_id=1 AND user.name!="" AND sprayed_accounts>=10 | stats count AS successes, dc(src_endpoint.ip) AS stuffing_sources, values(src_endpoint.ip) AS source_sample, values(src_endpoint.autonomous_system.name) AS asn_sample, min(timestamp) AS first_success, max(timestamp) AS last_success by user.name | sort -successes, user.name | head 200'
+  - name: distributed_by_asn
+    role: discovery
+    query: "class_uid=3002 status_id=2 | stats count AS failures, dc(user.name) AS accounts, dc(src_endpoint.ip) AS source_ips by src_endpoint.autonomous_system.number, src_endpoint.autonomous_system.name | where source_ips >= 5 AND accounts >= 20 | sort -accounts | head 100"
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -39,13 +55,16 @@ tags:
            the inverse of brute force. High-failure sources are the easy
            half; the hunt's real product is the SUCCESSES inside those
            sources. A 2% hit rate on ten thousand attempts is two hundred
-           compromised customers, and those two hundred are the lead."
+           compromised customers, and those two hundred are the lead.
+           The stuffing_sources pivot measures the per-source shape and
+           landed_accounts lists the successes from those sources."
 
 /query: distributed variants of the same shape
   note:   "Serious stuffing spreads sources thin to stay under per-IP limits.
            Re-aggregate by ASN, user-agent family and interval texture —
            a thousand IPs each trying six accounts with identical pacing is
-           one actor, and the per-IP view was designed to hide that."
+           one actor, and the per-IP view was designed to hide that.
+           The distributed_by_asn pivot already re-aggregates failures by ASN."
 
 ## What the landed accounts did next
 

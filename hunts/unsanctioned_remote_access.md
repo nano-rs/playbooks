@@ -15,6 +15,19 @@ telemetry:
     - network.connection
 mitre_tactic: command-and-control
 mitre_technique: T1219
+hypothesis: "An intruder who installs a commercial remote-access (RMM) tool gets a signed, reputable, EDR-tolerated C2 channel. Any one org sanctions one or two such products, which run fleet-wide from the deployment pipeline; every other tool in the LOLRMM corpus is zero-baseline here, so its first execution on a host is a tripwire, as is a sanctioned tool on a host or tenant outside the managed flow, or rendezvous traffic from a host with no matching install. Users installing personal remote-desktop tools are the unsanctioned-but-not-hostile middle."
+risk_weight: 6
+default_severity: medium
+pivots:
+  - name: rmm_execution_census
+    role: coverage
+    query: 'class_uid=1007 process.name IN ("anydesk.exe","anydesk","teamviewer.exe","teamviewer_service.exe","tv_w32.exe","tv_x64.exe","teamviewerd","screenconnect.clientservice.exe","screenconnect.windowsclient.exe","connectwisecontrol.client.exe","ltsvc.exe","lttray.exe","atera_agent.exe","ateraagent.exe","srservice.exe","srserver.exe","sragent.exe","srmanager.exe","rustdesk.exe","rustdesk","rutserv.exe","rfusclient.exe","client32.exe","aeroadmin.exe","aa_v3.exe","ammyy_admin.exe","supremo.exe","supremoservice.exe","ultraviewer_desktop.exe","ultraviewer_service.exe","todesk.exe","todesk_service.exe","sunloginclient.exe","hoptodesk.exe","getscreen.exe","dwagent.exe","dwagsvc.exe","meshagent.exe","meshagent","tacticalrmm.exe","ninjarmmagent.exe","pcmonitorsrv.exe","lmiguardiansvc.exe","logmein.exe","lmi_rescue.exe","bomgar-scc.exe","remoting_host.exe","quickassist.exe","parsecd.exe","nxservice.exe","nxplayer.exe","winvnc.exe","vncserver.exe","tvnserver.exe","x11vnc","x2goclient.exe","remotepcservice.exe","zaservice.exe","syncrolive.agent.service.exe","level.exe","rport.exe","ngrok.exe","ngrok","cloudflared.exe","cloudflared","tailscaled.exe","tailscaled","zerotier-one_x64.exe","zerotier-one","tmate","psexec.exe","psexec64.exe","psexesvc.exe","putty.exe","winscp.exe","mobaxterm.exe","mremoteng.exe","rdcman.exe") | stats count, dc(device.hostname) AS hosts, dc(actor.user.name) AS users, min(timestamp) AS first_seen, max(timestamp) AS last_seen by process.name | sort -hosts | head 200'
+  - name: rmm_low_prevalence_tools
+    role: discovery
+    query: 'class_uid=1007 process.name IN ("anydesk.exe","anydesk","teamviewer.exe","teamviewer_service.exe","tv_w32.exe","tv_x64.exe","teamviewerd","screenconnect.clientservice.exe","screenconnect.windowsclient.exe","connectwisecontrol.client.exe","ltsvc.exe","lttray.exe","atera_agent.exe","ateraagent.exe","srservice.exe","srserver.exe","sragent.exe","srmanager.exe","rustdesk.exe","rustdesk","rutserv.exe","rfusclient.exe","client32.exe","aeroadmin.exe","aa_v3.exe","ammyy_admin.exe","supremo.exe","supremoservice.exe","ultraviewer_desktop.exe","ultraviewer_service.exe","todesk.exe","todesk_service.exe","sunloginclient.exe","hoptodesk.exe","getscreen.exe","dwagent.exe","dwagsvc.exe","meshagent.exe","meshagent","tacticalrmm.exe","ninjarmmagent.exe","pcmonitorsrv.exe","lmiguardiansvc.exe","logmein.exe","lmi_rescue.exe","bomgar-scc.exe","remoting_host.exe","quickassist.exe","parsecd.exe","nxservice.exe","nxplayer.exe","winvnc.exe","vncserver.exe","tvnserver.exe","x11vnc","x2goclient.exe","remotepcservice.exe","zaservice.exe","syncrolive.agent.service.exe","level.exe","rport.exe","ngrok.exe","ngrok","cloudflared.exe","cloudflared","tailscaled.exe","tailscaled","zerotier-one_x64.exe","zerotier-one","tmate","psexec.exe","psexec64.exe","psexesvc.exe","putty.exe","winscp.exe","mobaxterm.exe","mremoteng.exe","rdcman.exe") | stats count, dc(device.hostname) AS hosts, values(device.hostname) AS host_list, values(actor.user.name) AS users, values(process.parent_process.name) AS parents, values(process.file.path) AS paths, min(timestamp) AS first_seen by process.name | where hosts <= 5 | sort +hosts, -count | head 200'
+  - name: rmm_rendezvous_dns
+    role: discovery
+    query: 'class_uid=4003 (query.hostname ENDSWITH ".anydesk.com" OR query.hostname ENDSWITH ".teamviewer.com" OR query.hostname ENDSWITH ".screenconnect.com" OR query.hostname ENDSWITH ".splashtop.com" OR query.hostname ENDSWITH ".atera.com" OR query.hostname ENDSWITH ".rustdesk.com" OR query.hostname ENDSWITH ".remoteutilities.com" OR query.hostname ENDSWITH ".netsupportsoftware.com" OR query.hostname ENDSWITH ".aeroadmin.com" OR query.hostname ENDSWITH ".ammyy.com" OR query.hostname ENDSWITH ".supremocontrol.com" OR query.hostname ENDSWITH ".ultraviewer.net" OR query.hostname ENDSWITH ".todesk.com" OR query.hostname ENDSWITH ".oray.com" OR query.hostname ENDSWITH ".hoptodesk.com" OR query.hostname ENDSWITH ".getscreen.me" OR query.hostname ENDSWITH ".dwservice.net" OR query.hostname ENDSWITH ".meshcentral.com" OR query.hostname ENDSWITH ".ninjarmm.com" OR query.hostname ENDSWITH ".pulseway.com" OR query.hostname ENDSWITH ".logmein.com" OR query.hostname ENDSWITH ".logmeinrescue.com" OR query.hostname ENDSWITH ".gotoassist.com" OR query.hostname ENDSWITH ".beyondtrustcloud.com" OR query.hostname ENDSWITH ".bomgarcloud.com" OR query.hostname ENDSWITH ".remotedesktop.google.com" OR query.hostname ENDSWITH ".parsec.app" OR query.hostname ENDSWITH ".nomachine.com" OR query.hostname ENDSWITH ".remotepc.com" OR query.hostname ENDSWITH ".zohoassist.com" OR query.hostname ENDSWITH ".syncromsp.com" OR query.hostname ENDSWITH ".level.io" OR query.hostname ENDSWITH ".rport.io" OR query.hostname ENDSWITH ".ngrok.io" OR query.hostname ENDSWITH ".ngrok-free.app" OR query.hostname ENDSWITH ".ngrok.app" OR query.hostname ENDSWITH ".trycloudflare.com" OR query.hostname ENDSWITH ".tailscale.com" OR query.hostname ENDSWITH ".zerotier.com" OR query.hostname ENDSWITH ".tmate.io") | stats count, dc(src_endpoint.ip) AS sources, values(src_endpoint.ip) AS source_ips, values(src_endpoint.hostname) AS source_hosts, min(timestamp) AS first_seen by query.hostname | sort +sources, -count | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -115,7 +128,10 @@ The watchlist below is the complete LOLRMM project corpus — 311 tools as of 20
            niche tail (one admin's PuTTY habit), and a large zero set.
            Publish the partition in the sweep narrative — the sanctioned
            list is something most orgs have never actually written down,
-           and this census IS that document."
+           and this census IS that document. The rmm_execution_census pivot
+           counts hosts per watched binary name (a subset of the corpus
+           that has stable process names); signer and internal-name
+           matching is left to the investigator."
 
 ## The tripwires
 
@@ -128,7 +144,8 @@ The watchlist below is the complete LOLRMM project corpus — 311 tools as of 20
            one-shot execution — the former is meant to survive, and pair
            it with the autoruns hunt's census. A renamed binary matched on
            internal name or signer outranks both, because renaming is
-           intent."
+           intent. The rmm_low_prevalence_tools pivot lists watched
+           binaries seen on at most five hosts, with the host list."
 
 ## Sanctioned tools in unsanctioned places
 
@@ -147,7 +164,8 @@ The watchlist below is the complete LOLRMM project corpus — 311 tools as of 20
            them from a host where the census shows NO corresponding
            install means a portable copy ran and left, or something is
            tunnelling in the tool's clothing. This leg also catches the
-           browser-only variants that never write a binary at all."
+           browser-only variants that never write a binary at all. The rmm_rendezvous_dns pivot lists
+           DNS lookups of known RMM and tunnel domains per source."
 
 ## Rule out the boring explanation
 

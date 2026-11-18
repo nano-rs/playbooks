@@ -17,6 +17,34 @@ telemetry:
     - endpoint.file
 mitre_tactic: exfiltration
 mitre_technique: T1567
+hypothesis: "Exfiltration is a volume anomaly wearing legitimate credentials: a host pushing far more bytes to external addresses than its peers, uploads to a destination few other hosts use, or a user downloading or syncing many more distinct files from SharePoint, OneDrive or Drive than anyone else. The benign twins are legitimate bulk movers (backups, update and telemetry CDNs, legal exports, quarter-end finance, a leaver's mailbox archive) whose role, timing and destination fit an established rhythm."
+risk_weight: 7
+default_severity: medium
+pivots:
+  - name: egress_telemetry_census
+    role: coverage
+    query: 'class_uid IN (4001, 4002, 6006) | stats count, sum(traffic.bytes_out) AS bytes_out, dc(src_endpoint.ip) AS sources by class_uid, metadata.product.name | sort -count | head 50'
+  - name: host_external_egress
+    role: discovery
+    query: 'class_uid=4001 traffic.bytes_out>0 dst_endpoint.ip NOT IN (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8) | stats sum(traffic.bytes_out) AS bytes_out, sum(traffic.bytes_in) AS bytes_in, count AS connections, dc(dst_endpoint.ip) AS destinations, values(src_endpoint.hostname) AS hostnames by src_endpoint.ip | sort -bytes_out | head 200'
+    scorer:
+      method: iqr
+      field: bytes_out
+      threshold: 3
+  - name: upload_destinations
+    role: discovery
+    query: 'class_uid=4002 http_request.http_method IN ("POST","PUT") traffic.bytes_out>0 | stats sum(traffic.bytes_out) AS bytes_out, count AS requests, dc(src_endpoint.ip) AS estate_sources, values(src_endpoint.ip) AS source_ips by http_request.url.hostname | where estate_sources <= 3 | sort -bytes_out | head 200'
+    scorer:
+      method: zscore
+      field: bytes_out
+      threshold: 3
+  - name: saas_bulk_downloads
+    role: discovery
+    query: 'class_uid=6006 activity_name IN ("Download","Sync") | stats count AS downloads, dc(file.path) AS distinct_files, dc(src_endpoint.ip) AS source_ips, values(metadata.product.name) AS platforms by actor.user.name | sort -distinct_files | head 200'
+    scorer:
+      method: zscore
+      field: distinct_files
+      threshold: 3
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -42,7 +70,7 @@ Volume alone convicts nobody. The hunt's job is to find the deviation, then chec
            Shapes worth ranking up: breadth (many sites or mailboxes touched
            for the first time), depth (a whole document library in one
            session), and mechanism shifts (a user who has only ever browsed
-           suddenly bulk-syncing)."
+           suddenly bulk-syncing). The saas_bulk_downloads pivot measures distinct files downloaded or synced per user (File Hosting Activity 6006: actor.user.name, file.path) and flags outliers; it sees only the sweep window, so the user's own trailing history is still yours to fetch."
 
 /query: per-host outbound byte volumes to non-CDN destinations
   window: 24h
@@ -51,7 +79,7 @@ Volume alone convicts nobody. The hunt's job is to find the deviation, then chec
            backup endpoints, update CDNs, telemetry sinks. What remains is
            small. Rank by destination rarity for the estate: personal cloud
            storage, transfer services, and never-before-seen domains beat raw
-           byte counts."
+           byte counts. The host_external_egress pivot sums Network Activity traffic.bytes_out per src_endpoint.ip to non-private destinations; upload_destinations sums proxy POST / PUT bytes per http_request.url.hostname used by three or fewer sources."
 
 ## Corroborate
 

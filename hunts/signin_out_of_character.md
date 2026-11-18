@@ -15,6 +15,26 @@ telemetry:
     - identity.mfa
 mitre_tactic: initial-access
 mitre_technique: T1078.004
+hypothesis: "A stolen credential is used with the right password and the wrong everything else: country, ASN, device, hours, protocol, MFA behavior. Each deviation alone is daily noise in a mobile workforce; two or three stacked on one account in one window (a new country plus a new ASN, failed MFA prompts then an approval, a legacy-protocol success) is not. The benign twins are corporate VPN or egress changes that move many accounts at once, and travelers whose own history is already chaotic."
+risk_weight: 6
+default_severity: medium
+pivots:
+  - name: signin_census
+    role: coverage
+    query: "class_uid=3002 | stats count, dc(user.name) AS accounts, dc(src_endpoint.location.country) AS countries, dc(src_endpoint.autonomous_system.number) AS asns, dc(is_mfa) AS mfa_states by source_type"
+  - name: multi_country_accounts
+    role: discovery
+    query: 'class_uid=3002 status_id=1 src_endpoint.location.country!="" | stats count AS signins, dc(src_endpoint.location.country) AS countries, values(src_endpoint.location.country) AS country_list, dc(src_endpoint.autonomous_system.number) AS asns, values(src_endpoint.autonomous_system.name) AS asn_names, dc(src_endpoint.ip) AS source_ips, min(timestamp) AS first_signin, max(timestamp) AS last_signin by user.name | where countries >= 2 | sort -countries, -asns | head 200'
+    scorer:
+      method: zscore
+      field: asns
+      threshold: 3
+  - name: geo_asn_population
+    role: discovery
+    query: 'class_uid=3002 status_id=1 src_endpoint.location.country!="" | stats count AS signins, dc(user.name) AS accounts, values(user.name) AS account_sample by src_endpoint.location.country, src_endpoint.autonomous_system.name | sort accounts | head 200'
+  - name: mfa_and_legacy_stacks
+    role: discovery
+    query: 'class_uid=3002 | eval failed=if(status_id==2,1,0), succeeded=if(status_id==1,1,0), mfa_success=if(status_id==1 && is_mfa==true,1,0), basic_auth=if(auth_protocol_id==11,1,0) | stats sum(failed) AS failures, sum(succeeded) AS successes, sum(mfa_success) AS mfa_successes, sum(basic_auth) AS basic_auth_signins, dc(src_endpoint.ip) AS source_ips, dc(src_endpoint.location.country) AS countries by user.name | where (failures >= 5 AND successes >= 1) OR basic_auth_signins >= 1 | sort -failures | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -50,7 +70,10 @@ The comparison that matters is against the account's *own* history, never agains
            holiday; new geo + new device + first-seen ASN on the same sign-in
            is the shape worth an analyst's morning. Legacy-protocol fallback
            alongside modern-auth success on the same account is another
-           stack worth surfacing — attackers probe the weak door too."
+           stack worth surfacing — attackers probe the weak door too.
+           The multi_country_accounts and mfa_and_legacy_stacks pivots measure
+           these stacks within the sweep window only; the 30-day owner
+           profile is still yours to build."
 
 /query: geographically impossible sign-in pairs
   note:   "Compute travel speed between consecutive sign-ins per account.
@@ -72,7 +95,8 @@ The comparison that matters is against the account's *own* history, never agains
   note:   "Corporate VPN gateway changes make whole departments 'move country'
            overnight. Check whether the new geo is new for MANY accounts at
            once — a fleet-wide shift is an IT change, one account shifting
-           alone is the lead."
+           alone is the lead. The geo_asn_population pivot counts how many
+           accounts share each country and ASN."
 
 /pivot: what the session did after the deviating sign-in
   note:   "An owner signs in and does their job; an intruder inventories it.

@@ -13,6 +13,22 @@ telemetry:
     - identity.kerberos
 mitre_tactic: credential-access
 mitre_technique: T1558.003
+hypothesis: "Legitimate Kerberos is need-driven: a client requests a service ticket for a service it is about to use, so requests per principal are sparse and repetitive. Kerberoasting inverts that: one principal requests service tickets in a burst far above its peers (preferring RC4), and AS-REP roasting shows one source requesting TGTs for many accounts. The benign twins are vulnerability scanners and identity-posture products that roast on a fixed schedule from fixed hosts, and authorized red teams."
+risk_weight: 8
+default_severity: medium
+pivots:
+  - name: kerberos_census
+    role: coverage
+    query: 'class_uid=3002 (auth_protocol="kerberos" OR metadata.event_code IN ("4768","4769","4771")) | stats count, dc(user.name) AS principals, dc(src_endpoint.ip) AS sources by activity_name, metadata.event_code, metadata.product.name'
+  - name: service_ticket_bursts
+    role: discovery
+    query: 'class_uid=3002 (activity_id=4 OR metadata.event_code="4769") | eval failed=if(status_id==2,1,0) | stats count AS service_tickets, sum(failed) AS failures, dc(src_endpoint.ip) AS sources, values(src_endpoint.ip) AS source_ips, dc(dst_endpoint.hostname) AS dcs, min(timestamp) AS first_request, max(timestamp) AS last_request by user.name | where service_tickets >= 20 | sort -service_tickets | head 200'
+  - name: tgt_requests_many_accounts
+    role: discovery
+    query: 'class_uid=3002 (activity_id=3 OR metadata.event_code="4768") src_endpoint.ip!="" | stats count AS tgt_requests, dc(user.name) AS accounts, values(user.name) AS account_sample, min(timestamp) AS first_request, max(timestamp) AS last_request by src_endpoint.ip | where accounts >= 5 | sort -accounts | head 100'
+  - name: preauth_failure_spread
+    role: discovery
+    query: 'class_uid=3002 status_id=2 (activity_id=6 OR metadata.event_code="4771") | stats count AS preauth_failures, dc(user.name) AS accounts, values(user.name) AS account_sample by src_endpoint.ip | where accounts >= 5 | sort -accounts | head 100'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -39,7 +55,10 @@ This hunt needs ticket events from the domain controllers (4768/4769) with encry
            it has never authenticated to and never will. Ordinary clients
            accumulate distinct SPNs slowly and re-request the same few.
            Keep the requesting host: a harvest from a workstation carries a
-           different story than one from a domesticated automation box."
+           different story than one from a domesticated automation box.
+           The service_ticket_bursts pivot measures request volume per
+           principal; the SPN and encryption type are not columns (they sit
+           in unmapped / raw_data), so read them from the burst's events."
 
 /query: RC4 service tickets on a domain that has moved past RC4
   note:   "Crackers request RC4 because it is orders of magnitude cheaper to
@@ -57,7 +76,9 @@ This hunt needs ticket events from the domain controllers (4768/4769) with encry
   note:   "AS-REP roasting needs no credentials at all — just the account
            list. Pre-auth-disabled accounts are rare and enumerable; a
            request burst against several of them from one source is
-           somebody working through that list. The population itself
+           somebody working through that list (the tgt_requests_many_accounts
+           pivot measures one source requesting TGTs for many accounts;
+           the pre-auth flag itself is only in raw_data). The population itself
            belongs in the sweep narrative: every entry is standing attack
            surface someone chose to keep."
 

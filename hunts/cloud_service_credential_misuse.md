@@ -13,6 +13,30 @@ telemetry:
     - cloud.control_plane
 mitre_tactic: defense-evasion
 mitre_technique: T1550.001
+hypothesis: "A service credential has the most predictable life in the estate (same callers, same APIs, same rhythm), so a stolen key betrays itself quickly: calls from more networks than it ever uses, a breadth-first sweep of List, Get and Describe calls across services, or IAM writes by a credential that never touches IAM. The benign twins are shared CI credentials too noisy to baseline and workloads re-homed by a migration, which move every credential in the project together rather than one alone."
+risk_weight: 6
+default_severity: medium
+pivots:
+  - name: service_credential_census
+    role: coverage
+    query: 'class_uid=6003 (actor.user.type IN ("Service","Application","AssumedRole","AWSService") OR actor.user.name=*.gserviceaccount.com) actor.user.name!=*AWSReservedSSO* actor.user.uid!=*AWSReservedSSO* | stats count, dc(actor.user.name) AS credentials, dc(api.operation) AS operations by cloud.provider, actor.user.type | sort -count | head 50'
+  - name: credential_source_spread
+    role: discovery
+    query: 'class_uid=6003 (actor.user.type IN ("Service","Application","AssumedRole","AWSService") OR actor.user.name=*.gserviceaccount.com) actor.user.name!=*AWSReservedSSO* actor.user.uid!=*AWSReservedSSO* | stats count, dc(src_endpoint.ip) AS source_ips, dc(src_endpoint.autonomous_system.number) AS source_asns, values(src_endpoint.autonomous_system.name) AS asn_names, values(src_endpoint.location.country) AS countries by actor.user.name, cloud.provider | sort -source_ips, -source_asns | head 200'
+    scorer:
+      method: iqr
+      field: source_ips
+      threshold: 3
+  - name: enumeration_breadth
+    role: discovery
+    query: 'class_uid=6003 (actor.user.type IN ("Service","Application","AssumedRole","AWSService") OR actor.user.name=*.gserviceaccount.com) actor.user.name!=*AWSReservedSSO* actor.user.uid!=*AWSReservedSSO* (api.operation=list* OR api.operation=get* OR api.operation=describe* OR api.operation=*.list* OR api.operation=*.get* OR api.operation=*/read) | stats count AS read_calls, dc(api.operation) AS distinct_read_ops, dc(api.service.name) AS services, values(api.service.name) AS service_list by actor.user.name, cloud.provider | sort -distinct_read_ops | head 200'
+    scorer:
+      method: zscore
+      field: distinct_read_ops
+      threshold: 3
+  - name: machine_privilege_moves
+    role: discovery
+    query: 'class_uid=6003 (actor.user.type IN ("Service","Application","AssumedRole","AWSService") OR actor.user.name=*.gserviceaccount.com) actor.user.name!=*AWSReservedSSO* actor.user.uid!=*AWSReservedSSO* (api.operation IN ("CreateAccessKey","CreateUser","AttachRolePolicy","AttachUserPolicy","PutRolePolicy","PutUserPolicy","UpdateAssumeRolePolicy","CreatePolicyVersion","SetIamPolicy","google.iam.admin.v1.CreateServiceAccountKey","google.iam.admin.v1.CreateServiceAccount") OR api.operation=*roleassignments/write* OR api.operation=*setiampolicy*) | stats count, values(api.operation) AS operations, values(resources.name) AS resources, values(src_endpoint.ip) AS source_ips by actor.user.name, cloud.provider, cloud.account.uid | sort -count | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -46,13 +70,13 @@ This is the machine sibling of the human sign-in hunt. The difference is that ma
   note:   "A key minted for a GKE workload calling from cloud-internal ranges
            that suddenly calls from a consumer ISP is the cleanest shape this
            hunt produces. Grade by ASN category — new-region cloud egress is a
-           migration smell, residential or VPN-exit egress is not."
+           migration smell, residential or VPN-exit egress is not. The credential_source_spread pivot counts distinct source IPs and ASNs per service credential in the window (actor.user.type Service, Application, AssumedRole or AWSService, or a gserviceaccount.com name; IAM Identity Center SSO humans, whose role ARN in actor.user.uid contains AWSReservedSSO, are excluded)."
 
 /query: dormant credentials waking up
   note:   "A key unused for 60 days that authenticates today deserves a look
            regardless of source. Stolen key material is often old — exfiltrated
            from a repo or laptop long before use — and revival is the first
-           observable moment."
+           observable moment. This needs history beyond the sweep window: no pivot measures it."
 
 ## Look for the wrong questions
 
@@ -60,13 +84,13 @@ This is the machine sibling of the human sign-in hunt. The difference is that ma
   note:   "Workloads ask the same narrow questions forever; a thief inventories
            what the key can do. A credential whose call mix shifts from its
            usual methods to a breadth-first sweep of IAM, storage and compute
-           reads is doing reconnaissance, whoever holds it."
+           reads is doing reconnaissance, whoever holds it. The enumeration_breadth pivot counts distinct read-style operations and services per credential."
 
 /query: privilege and persistence moves by machine credentials
   note:   "Key creation, role grants, policy writes by a credential that has
            never touched IAM before is the escalation leg. Cross-reference the
            cloud persistence hunt — a hit on both in one sweep is one story,
-           not two leads."
+           not two leads. The machine_privilege_moves pivot lists them."
 
 ## Rule out the boring explanation
 

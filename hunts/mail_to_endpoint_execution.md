@@ -14,6 +14,22 @@ telemetry:
     - endpoint.process
 mitre_tactic: initial-access
 mitre_technique: T1566.001
+hypothesis: "The gateway and the EDR each hold half of a finding neither can emit: mail the gateway disliked (or a user released from quarantine) but delivered, and process activity on the recipient's endpoint. Joined on recipient and time (delivery, then Office spawning a script host, an archive extracted and run, or a binary under a mail or temp path within four hours) the halves become the earliest reliable picture of a phish that worked. The benign twin is the recipient who opens macro-laden partner spreadsheets every day; their own history is the filter."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: email_coverage
+    role: coverage
+    query: 'class_uid=4009 | stats count, dc(email.to) AS recipients, dc(email.from) AS senders by source_type, disposition_id'
+  - name: flagged_deliveries
+    role: discovery
+    query: 'class_uid=4009 | where severity_id >= 3 OR isnotnull(enrichments.ioc_domain_threat_type) OR isnotnull(enrichments.ioc_url_threat_type) OR isnotnull(enrichments.ioc_hash_threat_type) | stats count, dc(email.to) AS recipients, values(email.to) AS recipient_list, values(email.subject) AS subjects, values(disposition_id) AS dispositions, min(timestamp) AS first_delivery, max(timestamp) AS last_delivery by email.from | sort -recipients | head 200'
+  - name: campaign_bursts
+    role: discovery
+    query: 'class_uid=4009 | stats count, dc(email.to) AS recipients, values(email.to) AS recipient_list, min(timestamp) AS first_delivery, max(timestamp) AS last_delivery by email.from, email.subject | where recipients >= 10 | sort -recipients | head 200'
+  - name: mail_shaped_execution
+    role: discovery
+    query: 'class_uid=1007 ((process.parent_process.name IN ("outlook.exe","winword.exe","excel.exe","powerpnt.exe","onenote.exe","msaccess.exe","mspub.exe") process.name IN ("wscript.exe","cscript.exe","mshta.exe","powershell.exe","pwsh.exe","cmd.exe","rundll32.exe","regsvr32.exe","msiexec.exe","certutil.exe","bitsadmin.exe","curl.exe","hh.exe")) OR process.file.path CONTAINS "\\content.outlook\\" OR process.cmd_line CONTAINS "\\content.outlook\\" OR process.file.path CONTAINS "\\inetcache\\" OR process.file.path CONTAINS "\\temp\\temp1_" OR process.file.path CONTAINS "\\temp\\rar$" OR process.file.path CONTAINS "\\temp\\7z") | stats count, min(timestamp) AS first_exec, max(timestamp) AS last_exec, values(process.cmd_line) AS commands by actor.user.name, device.hostname, process.parent_process.name, process.name | sort +first_exec | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -38,7 +54,8 @@ tags:
            rewritten URLs, and anything released from quarantine by a user
            or an admin. Releases deserve their own respect — somebody
            overrode the machine's judgment, and attackers engineer exactly
-           that override."
+           that override. The flagged_deliveries pivot lists senders whose
+           mail carried a gateway severity or an IOC match, with recipients."
 
 ## The join
 
@@ -49,7 +66,9 @@ tags:
            hosts or shells, archive extraction followed by a run,
            first-seen binaries appearing under user profile paths, LNK or
            container-file mounts — the same vocabulary as the drive-by hunt,
-           arriving by mail instead of browser."
+           arriving by mail instead of browser. The mail_shaped_execution
+           pivot lists these shapes per user and host; join email.to to
+           actor.user.name (address versus account name may need mapping)."
 
 /query: for campaign bursts, the endpoint of EVERY recipient — not a sample
   note:   "When the same lure hit fifty inboxes, the yield is not fifty times
@@ -57,7 +76,8 @@ tags:
            Sampling is how that recipient is missed, and the burst is what
            makes exhaustive checking affordable — one lure analysis, N cheap
            endpoint probes. Report the denominator: '1 execution across 47
-           recipients' is a sentence that triages itself."
+           recipients' is a sentence that triages itself. The campaign_bursts pivot lists
+           sender and subject pairs that reached ten or more recipients."
 
 ## Corroborate and scope
 

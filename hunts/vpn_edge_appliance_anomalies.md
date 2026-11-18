@@ -16,6 +16,26 @@ telemetry:
     - network.connection
 mitre_tactic: initial-access
 mitre_technique: T1133
+hypothesis: "Edge appliances are the most attacked and least observed machines in the estate. Replayed credentials and hijacked sessions show as a user's successful external logons spreading across several networks or countries, or two distant networks inside one hour; appliance exploitation shows as new local accounts and admin changes on the box itself; and thin edge telemetry hides both. The benign twin is a travelling user on a known cadence and a network team pushing config from a jump host inside a maintenance window."
+risk_weight: 7
+default_severity: high
+pivots:
+  - name: edge_telemetry_census
+    role: coverage
+    query: 'class_uid IN (3001, 3002, 3005, 3006, 4001, 6003) | stats count, dc(user.name) AS users by metadata.product.name, class_uid | sort metadata.product.name | head 200'
+  - name: external_logon_spread
+    role: discovery
+    query: 'class_uid=3002 status_id=1 | where is_public_ip(src_endpoint.ip) | stats dc(src_endpoint.autonomous_system.number) AS asns, dc(src_endpoint.location.country) AS countries, dc(src_endpoint.ip) AS source_ips, count AS logons, values(src_endpoint.location.country) AS country_list, values(metadata.product.name) AS products by user.name | where asns >= 2 | sort -countries, -asns | head 200'
+    scorer:
+      method: zscore
+      field: asns
+      threshold: 2
+  - name: concurrent_external_sessions
+    role: discovery
+    query: 'class_uid=3002 status_id=1 user.name!="" src_endpoint.ip NOT IN (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16) | eval v=ip_version(src_endpoint.ip) | where v=4 | eval hour=strftime(timestamp, "%Y-%m-%d %H:00"), asn=if(src_endpoint.autonomous_system.number!=0, tostring(src_endpoint.autonomous_system.number), "") | stats dc(asn) AS asns_in_hour, dc(src_endpoint.location.country) AS countries_in_hour, dc(src_endpoint.ip) AS source_ip_count, values(src_endpoint.ip) AS source_ips, values(src_endpoint.location.country) AS countries, values(metadata.product.name) AS products, count AS logons by user.name, hour | where asns_in_hour>=2 | sort -countries_in_hour, -asns_in_hour, user.name, hour | head 200'
+  - name: account_and_group_changes_by_product
+    role: discovery
+    query: 'class_uid IN (3001, 3006) | stats count, values(activity_name) AS activities, values(user.name) AS target_accounts, values(actor.user.name) AS actors, values(src_endpoint.ip) AS source_ips, min(timestamp) AS first_seen, max(timestamp) AS last_seen by metadata.product.name, device.hostname | sort +count, metadata.product.name, device.hostname | head 200'
 budget:
   max_turns: 40
   max_tool_calls: 120
@@ -36,7 +56,16 @@ tags:
 /query: VPN authentications deviating from each user's own profile
   window: 24h
   from:   vpn_logs
-  note:   "The sign-in hunt's doctrine applied at the tunnel: new geo, new
+  note:   "Two pivots already measure the spread, over successful Authentication
+           (3002) logons from public src_endpoint.ip (VPN plus any other
+           internet-facing auth, products named in metadata.product.name):
+           external_logon_spread (distinct ASNs, countries and IPs per
+           user.name) and concurrent_external_sessions (two or more ASNs for
+           one user inside one hour). Neither compares against the user's own
+           history, and missing MFA (is_mfa) is not measured: check both on
+           the candidates.
+
+           The sign-in hunt's doctrine applied at the tunnel: new geo, new
            ASN, new client fingerprint, impossible-travel pairs, and
            always against the user's OWN history. Two edge-specific
            shapes deserve extra weight: concurrent sessions for one user
@@ -57,7 +86,13 @@ tags:
 ## The appliance as the victim
 
 /query: administrative logons and configuration changes on the appliances
-  note:   "Config writes, new local accounts, auth-policy edits, cert and
+  note:   "The account_and_group_changes_by_product pivot already lists
+           Account Change (3001) and Group Management (3006) events per
+           metadata.product.name and device.hostname; read the rows for the
+           edge products. Config, cert and firmware operations have no common
+           OCSF class across vendors: query them per product.
+
+           Config writes, new local accounts, auth-policy edits, cert and
            key changes, firmware operations — from whom and from WHERE.
            Admin reachable from the WAN side is a finding even with a
            legitimate actor; a new local account on an edge box is close
@@ -76,7 +111,11 @@ tags:
 ## The gap is also a finding
 
 /baseline: what these appliances CAN log versus what they are sending
-  note:   "Edge boxes routinely send auth logs and nothing else — no
+  note:   "The edge_telemetry_census pivot already lists event counts per
+           metadata.product.name and class_uid: an edge product with 3002
+           rows and no 3001 / 3006 / 6003 rows is the gap.
+
+           Edge boxes routinely send auth logs and nothing else — no
            config-change audit, no local-account events — and that
            silence gets read as health. Compare received event types
            against the platform's capability, the environment-recon
