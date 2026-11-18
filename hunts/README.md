@@ -104,7 +104,7 @@ Up to 12 per hunt (stock hunts use 3 to 7). Each pivot is a deterministic query 
 |---|---|---|
 | `name` | yes | Unique in the file, 1 to 64 characters of `a-z`, `0-9`, `_`, `-`. |
 | `role` | yes | `coverage`: proves the telemetry the hypothesis needs exists (a denominator). `discovery`: surfaces candidates. |
-| `dataset` | no | `events` (default): the query is **nPL** over the event table. `signals`: the query is one guarded SQL `SELECT` over detections that already fired (see below). |
+| `dataset` | no | Which Search dataset the **nPL** query reads: `events` (default, the event table), `signals` (detections that already fired) or `risk` (the per-entity risk grain). See below. |
 | `query` | yes | At most 8,192 characters, on one line. |
 | `scorer` | no | An outlier scorer over the pivot's rows (see below). |
 | `sources` | no | The `source_type`s the pivot needs. Leave it out in stock hunts: the product infers it from the query, and a pivot with no source predicate runs on any source. |
@@ -113,21 +113,28 @@ Rules for every pivot:
 
 - **OCSF only.** nano stores events as OCSF. Use real `ocsf_logs` columns (`device.hostname`, `actor.user.name`, `process.cmd_line`, `src_endpoint.ip`, `dst_endpoint.port`, `api.operation`, `query.hostname` ...), never the legacy UDM names (`src_ip`, `user`, `command_line`, `event_id` ...). Field placement depends on the class: process, file and registry events name the host in `device.hostname` and the user in `actor.user.name`; authentication names the subject in `user.name` and the source in `src_endpoint.*`; API activity names the identity in `actor.user.name`.
 - **Filter on `class_uid` first**, then specific field predicates. Do not filter on customer `source_type` names in a stock hunt.
-- **Aggregate first.** A pivot reads at most 1,000 rows (its scorer sees all of them) and hands the investigator the first 200, and every pivot of a sweep draws on the same `budget.max_rows`. So discovery pivots group by the entity (`stats ... by`), apply thresholds with `where`, and end in `sort` (with a tiebreak key) and `head`. A raw `table` of events is only acceptable behind a very selective filter, with `head`. `signals` pivots end in `LIMIT`.
+- **Aggregate first.** A pivot reads at most 1,000 rows (its scorer sees all of them) and hands the investigator the first 200, and every pivot of a sweep draws on the same `budget.max_rows`. So discovery pivots group by the entity (`stats ... by`), apply thresholds with `where`, and end in `sort` (with a tiebreak key) and `head`. A raw `table` of events is only acceptable behind a very selective filter, with `head`.
 - **Deterministic and cheap.** No `ai`, `inputlookup`, `join`, `append`, `transaction` or `sequence` commands, and nothing that depends on the wall clock: the server binds the sweep window.
 - nPL string comparisons are already case-insensitive. Write `process.name="powershell.exe"`; the compiler emits the indexed `lower(col)` form and puts the time bounds and every filter in one `WHERE`.
 
-### `dataset: signals` pivots
+### Datasets: `events`, `signals`, `risk`
 
-nPL has no detections dataset, so a pivot over detections that already fired is SQL. It is the one SQL shape a hunt may carry, and it runs through the same guard, row caps and lane as the investigator's own `sql` tool.
+Every pivot is nPL, the same language and compiler as Search, so an analyst always reads the pivot's own query. `dataset:` picks what it reads, exactly like `dataset=<name>` in Search:
 
-- One `SELECT` (or `WITH ... SELECT`), no `;`, no comments, no `SETTINGS`, no table functions, no `PREWHERE`.
-- Tables are named only through placeholders: `{signals}` (every detection in the window: real-time signals and scheduled findings, one row each) and `{events}` (the event table, OCSF columns in backticks, for example `` `src_endpoint.ip` ``). Subqueries are allowed; comma joins are not (use `JOIN`).
-- The query must read `{signals}`, and every read of `{signals}` or `{events}` binds the sweep window in its `WHERE`: `timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')}`.
-- `{signals}` columns: `id`, `timestamp`, `rule_id`, `rule_name`, `severity` (lowercase), `risk_score`, `risk_entity`, `matched_log_id` (the matched event's `id`), `source_type`, `detection_path` (`realtime` or `scheduled`).
-- Text matches in SQL use `lower(col)` forms and `class_uid` filters, like nPL does.
+- `events` (default): the event table, OCSF columns.
+- `signals`: every detection that fired in the sweep window, real-time and scheduled, one row each. Columns: `id`, `timestamp`, `rule_id`, `rule_name`, `severity` (lowercase), `risk_score`, `risk_entity`, `matched_log_id` (the matched event's `id`), `source_type`, `detection_path` (`realtime` or `scheduled`).
+- `risk`: the per-entity risk grain (decayed over trailing 24h / 7d windows). A risk pivot reads the entities whose latest finding falls inside the sweep window.
 
-`signals` pivots are also the escape hatch for a shape nPL cannot express over events (label entropy in `dns_tunneling_throughput.md`, for example); such a query still has to read `{signals}`, usually to mark rows a detection already covers.
+The server compiles the pivot for its dataset and runs it through the same guard and table allowlist as every hunt query. An events pivot can still reach detections through a subsearch, for example `id IN [dataset=signals severity="high" | return matched_log_id]`, and every events pivot's rows come back with the detections their entities already triggered, so a pivot does not need its own "already detected" column.
+
+nPL notes that matter for pivots:
+
+- **Compare two fields in `eval`, not in `where`.** `where a=b` compares the field `a` with the text `"b"`. Write `| eval same=if(a==b, 1, 0) | where same=1`.
+- **Chained aggregation** works: `| stats ... by a, b | stats ... by a`, and `eventstats` adds a group's aggregate to every row (use it instead of an `IN` subquery over the same table).
+- **`streamstats` runs in timestamp order** (oldest first). To keep the newest N rows of a group, count the group with `eventstats count AS n by g`, number it with `streamstats count AS seq by g`, and keep `where seq>n - N`.
+- Time arithmetic is in seconds: `eval recent=if(timestamp>=now() - 86400, 1, 0)`.
+
+A legacy `dataset: signals` pivot written as one SQL `SELECT` over `{signals}` / `{events}`, binding `{earliest:DateTime64(6, 'UTC')}` / `{latest:DateTime64(6, 'UTC')}`, still runs (nano 2.0.32), but it is no longer the authoring path: analysts see it only through an approximate nPL conversion.
 
 ### Scorers
 
@@ -196,7 +203,7 @@ A sweep submits evidence and a narrative. It does not, and structurally cannot, 
 
 ## Validating a change
 
-`scripts/validate_hunts.py` checks every file in this folder against the contract above (frontmatter, steps, budget ceilings, pivot shape, the `signals` SQL rules, OCSF field names, policy values). CI runs it on every pull request that touches `hunts/`:
+`scripts/validate_hunts.py` checks every file in this folder against the contract above (frontmatter, steps, budget ceilings, pivot shape, datasets, OCSF field names, policy values, and the legacy SQL rules). CI runs it on every pull request that touches `hunts/`:
 
 ```sh
 pip install pyyaml

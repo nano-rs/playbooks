@@ -27,7 +27,7 @@ pivots:
   - name: entity_risk_totals
     role: discovery
     dataset: signals
-    query: "SELECT risk_entity, sum(risk_score) AS total_risk, uniqExact(rule_id) AS distinct_rules, count() AS fires, round(distinct_rules / fires, 3) AS breadth_ratio, sumIf(risk_score, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS risk_last_24h, round(risk_last_24h / greatest(total_risk, 1), 3) AS recent_share, uniqExact(source_type) AS origin_sources, groupUniqArray(10)(rule_name) AS rules, groupUniqArray(5)(severity) AS severities, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY distinct_rules DESC, total_risk DESC, risk_entity ASC LIMIT 200"
+    query: 'risk_entity!="" | eval recent_risk=if(timestamp>=now() - 86400, risk_score, 0) | stats sum(risk_score) AS total_risk, dc(rule_id) AS distinct_rules, count AS fires, sum(recent_risk) AS risk_last_24h, dc(source_type) AS origin_sources, values(rule_name) AS rules, values(severity) AS severities, min(timestamp) AS first_fire, max(timestamp) AS last_fire by risk_entity | eval breadth_ratio=round(distinct_rules / fires, 3), recent_share=round(risk_last_24h / max(total_risk, 1), 3) | sort -distinct_rules, -total_risk, risk_entity | head 200'
     scorer:
       method: zscore
       field: distinct_rules
@@ -35,7 +35,7 @@ pivots:
   - name: accelerating_entities
     role: discovery
     dataset: signals
-    query: "SELECT risk_entity, sum(risk_score) AS total_risk, sumIf(risk_score, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS risk_last_24h, round(risk_last_24h / greatest(total_risk, 1), 3) AS recent_share, uniqExactIf(rule_id, timestamp >= {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS distinct_rules_24h, uniqExact(rule_id) AS distinct_rules, countIf(timestamp < {latest:DateTime64(6, 'UTC')} - INTERVAL 1 DAY) AS prior_fires, uniqExact(source_type) AS origin_sources, groupUniqArray(10)(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity HAVING distinct_rules_24h >= 2 AND recent_share >= 0.5 ORDER BY distinct_rules_24h DESC, prior_fires ASC, risk_last_24h DESC, risk_entity ASC LIMIT 200"
+    query: 'risk_entity!="" | eval recent=if(timestamp>=now() - 86400, 1, 0), recent_risk=if(recent=1, risk_score, 0), recent_rule=if(recent=1, rule_id, ""), prior=if(recent=0, 1, 0) | stats sum(risk_score) AS total_risk, sum(recent_risk) AS risk_last_24h, dc(recent_rule) AS distinct_rules_24h, dc(rule_id) AS distinct_rules, sum(prior) AS prior_fires, dc(source_type) AS origin_sources, values(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire by risk_entity | eval recent_share=round(risk_last_24h / max(total_risk, 1), 3) | where distinct_rules_24h>=2 AND recent_share>=0.5 | sort -distinct_rules_24h, prior_fires, -risk_last_24h, risk_entity | head 200'
   - name: top_risk_entity_events
     role: discovery
     dataset: signals

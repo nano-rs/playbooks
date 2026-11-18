@@ -26,11 +26,11 @@ pivots:
   - name: detection_census
     role: coverage
     dataset: signals
-    query: "SELECT rule_name, detection_path, count() AS fires, uniqExact(risk_entity) AS entities, groupUniqArray(4)(severity) AS severities, sum(risk_score) AS total_risk, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} GROUP BY rule_name, detection_path ORDER BY fires DESC, rule_name ASC LIMIT 200"
+    query: '* | stats count AS fires, dc(risk_entity) AS entities, values(severity) AS severities, sum(risk_score) AS total_risk, min(timestamp) AS first_fire, max(timestamp) AS last_fire by rule_name, detection_path | sort -fires, rule_name | head 200'
   - name: signal_clusters
     role: discovery
     dataset: signals
-    query: "SELECT risk_entity, uniqExact(rule_id) AS distinct_rules, count() AS fires, countIf(severity IN ('low', 'info', 'informational')) AS low_fires, groupUniqArray(10)(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND risk_entity != '' GROUP BY risk_entity ORDER BY distinct_rules DESC, fires DESC, risk_entity ASC LIMIT 200"
+    query: 'risk_entity!="" | eval low=if(severity="low" OR severity="info" OR severity="informational", 1, 0) | stats dc(rule_id) AS distinct_rules, count AS fires, sum(low) AS low_fires, values(rule_name) AS rules, min(timestamp) AS first_fire, max(timestamp) AS last_fire by risk_entity | sort -distinct_rules, -fires, risk_entity | head 200'
     scorer:
       method: zscore
       field: distinct_rules
@@ -38,7 +38,7 @@ pivots:
   - name: high_severity_low_volume
     role: discovery
     dataset: signals
-    query: "SELECT rule_id, rule_name, severity, detection_path, count() AS fires, uniqExact(risk_entity) AS entities, groupUniqArray(10)(risk_entity) AS entity_sample, groupUniqArray(10)(matched_log_id) AS matched_log_ids, min(timestamp) AS first_fire, max(timestamp) AS last_fire FROM {signals} WHERE timestamp >= {earliest:DateTime64(6, 'UTC')} AND timestamp <= {latest:DateTime64(6, 'UTC')} AND severity IN ('high', 'critical') GROUP BY rule_id, rule_name, severity, detection_path HAVING fires <= 5 ORDER BY severity = 'critical' DESC, fires ASC, rule_name ASC LIMIT 200"
+    query: 'severity IN ("high", "critical") | stats count AS fires, dc(risk_entity) AS entities, values(risk_entity) AS entity_sample, values(matched_log_id) AS matched_log_ids, min(timestamp) AS first_fire, max(timestamp) AS last_fire by rule_id, rule_name, severity, detection_path | where fires<=5 | eval is_critical=if(severity="critical", 1, 0) | sort -is_critical, fires, rule_name | head 200'
   - name: top_entity_events
     role: discovery
     dataset: signals

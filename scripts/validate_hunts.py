@@ -149,6 +149,20 @@ def strip_quoted(q: str) -> str:
     return re.sub(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'', '""', q)
 
 
+def check_npl_query(name: str, q: str, dataset: str) -> list[str]:
+    problems = check_events_query(name, q) if dataset == "events" else []
+    search = strip_quoted(q)
+    # `where a=b` compares field a with the TEXT "b": two-field compares go in eval.
+    for m in re.finditer(r"\|\s*where\s+([^|]+)", search, re.I):
+        for c in re.finditer(r"\b([a-z_][\w.]*)\s*(==|!=|=)\s*([a-z_][\w.]*)\b", m.group(1), re.I):
+            if c.group(3).lower() not in ("and", "or", "not", "true", "false", "null"):
+                problems.append(
+                    f"pivot `{name}` compares `{c.group(1)}` with `{c.group(3)}` in where, which reads the second as text; "
+                    "compare fields in eval (`eval same=if(a==b, 1, 0) | where same=1`)"
+                )
+    return problems
+
+
 def check_events_query(name: str, q: str) -> list[str]:
     problems = []
     search = strip_quoted(q)
@@ -267,17 +281,24 @@ def check_file(path: Path, errors: list[str]) -> list[dict]:
             fail(errors, file, f"pivot `{name}` role must be coverage or discovery")
         roles.add(role)
         dataset = p.get("dataset", "events")
-        if dataset not in ("events", "signals"):
-            fail(errors, file, f"pivot `{name}` dataset must be events or signals")
+        if dataset not in ("events", "signals", "risk"):
+            fail(errors, file, f"pivot `{name}` dataset must be events, signals or risk")
         q = str(p.get("query", "")).strip()
         if not q:
             fail(errors, file, f"pivot `{name}` has an empty query")
         if len(q) > MAX_PIVOT_QUERY_CHARS:
             fail(errors, file, f"pivot `{name}` query exceeds {MAX_PIVOT_QUERY_CHARS} characters")
-        problems = check_signals_query(name, q) if dataset == "signals" else check_events_query(name, q)
+        sql = bool(re.match(r"\s*(select|with)\s", q, re.I))
+        if sql and dataset != "signals":
+            problems = [f"pivot `{name}` must be nPL (only a legacy signals pivot may be SQL)"]
+        elif sql:
+            problems = check_signals_query(name, q)
+            print(f"WARN  {file}: pivot `{name}` is legacy SQL; author it in nPL so analysts can read it")
+        else:
+            problems = check_npl_query(name, q, dataset)
         for problem in problems:
             fail(errors, file, problem)
-        if dataset == "events":
+        if dataset == "events" and not sql:
             for w in warn_events_query(name, q):
                 print(f"WARN  {file}: {w}")
         scorer = p.get("scorer")
