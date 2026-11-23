@@ -76,9 +76,9 @@ pivots:
 # investigator chooses its own path after reading the pivots.
 budget:
   max_turns: 40
-  max_tool_calls: 60
+  max_tool_calls: 120
   max_rows: 5000
-  max_wall_seconds: 900
+  max_wall_seconds: 2700
 
 tags: [lateral-movement, rdp]
 ---
@@ -170,14 +170,16 @@ Releases before 2.0.32 ignore these keys, and every synced hunt starts at the de
 
 ### Budget
 
-`budget:` is the ceiling one sweep may spend, checked at import against fixed ceilings. A file without it gets the defaults. Each sweep also gets an AI token budget of 500,000, which a file does not set.
+`budget:` is the ceiling one sweep may spend, checked at import against fixed ceilings. A file without it gets the defaults. Each sweep also gets an AI token budget of 1,000,000, which a file does not set.
 
 | Field | Default | Ceiling |
 |---|---|---|
 | `max_turns` | 40 | 200 |
-| `max_tool_calls` | 60 | 1,000 |
+| `max_tool_calls` | 120 | 1,000 |
 | `max_rows` | 5,000 | 100,000 |
-| `max_wall_seconds` | 900 | 3,600 |
+| `max_wall_seconds` | 2,700 (45 minutes) | 3,600 |
+
+Releases before 2.0.35 default to 60 tool calls, 900 seconds and 500,000 AI tokens.
 
 ### Older releases
 

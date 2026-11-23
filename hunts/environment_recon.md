@@ -27,7 +27,7 @@ budget:
   max_turns: 40
   max_tool_calls: 100
   max_rows: 8000
-  max_wall_seconds: 900
+  max_wall_seconds: 2700
 tags:
   - telemetry
   - coverage
