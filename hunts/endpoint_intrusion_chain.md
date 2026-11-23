@@ -57,9 +57,9 @@ pivots:
     query: 'class_uid=4003 query.hostname!="" | eval qtype=upper(tostring(query.type)), parent_domain=registered_domain(query.hostname), lbl=mvindex(split(query.hostname, "."), 0), lbl_len=len(lbl), name_len=len(query.hostname), ent=entropy(lbl), is_txt_null=if(qtype="TXT" OR qtype="NULL", 1, 0), is_apex=if(parent_domain==query.hostname, 1, 0) | where parent_domain!="" AND is_apex=0 | stats dc(query.hostname) AS distinct_names, count AS queries, sum(is_txt_null) AS txt_null_queries, avg(name_len) AS avg_name_length, median(lbl_len) AS median_label_length, max(lbl_len) AS max_label_length, avg(ent) AS label_entropy_bits, dc(src_endpoint.ip) AS source_ips, values(src_endpoint.hostname) AS source_hosts, values(src_endpoint.ip) AS source_ip_sample, min(timestamp) AS first_seen, max(timestamp) AS last_seen by parent_domain | eval txt_null_share=round(txt_null_queries / queries, 3), label_entropy_bits=round(label_entropy_bits, 3), avg_name_length=round(avg_name_length, 1) | where distinct_names>=20 AND (if(median_label_length>=25, 1, 0) + if(label_entropy_bits>=4.0, 1, 0) + if(txt_null_share>=0.5, 1, 0))>=2 | sort -distinct_names, parent_domain | head 200'
 budget:
   max_turns: 40
-  max_tool_calls: 60
+  max_tool_calls: 120
   max_rows: 5000
-  max_wall_seconds: 900
+  max_wall_seconds: 2700
 tags:
   - endpoint
   - intrusion

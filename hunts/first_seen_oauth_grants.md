@@ -33,7 +33,7 @@ budget:
   max_turns: 40
   max_tool_calls: 120
   max_rows: 5000
-  max_wall_seconds: 900
+  max_wall_seconds: 2700
 tags:
   - identity
   - oauth
