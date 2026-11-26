@@ -1,19 +1,13 @@
 # nano Playbooks
 
-Official playbook library for [nano](https://nanos.sh) — Markdown + slash-command format that analysts can sync, fork, and customize.
+Official playbook library for [nano](https://nano.rs): Markdown and slash-command playbooks that analysts can sync, fork, and customize.
 
 ## Usage
 
-Add this repository in nano:
-
-1. Navigate to **Settings → Playbook Repositories**
-2. Click **Add Repository**
-3. Enter:
-   - **URL**: `https://github.com/nanos-sh/playbooks`
-   - **Branch**: `main`
-   - **Format**: `nano-playbook-md`
-4. Click **Sync** to fetch playbooks
-5. Browse and attach playbooks to cases as needed
+nano adds this repository on `main` automatically. Every install receives the
+playbooks as a signed content bundle published by app.nano.rs, so there is
+nothing to add by hand, and nano does not accept third-party playbook
+repositories. Browse the playbooks in nano and attach them to cases as needed.
 
 ## Repository Structure
 
@@ -30,7 +24,7 @@ Add this repository in nano:
 
 Each playbook is a single `.md` file with YAML frontmatter describing metadata and a body written as Markdown with `/slash-commands` for each investigative step. The parser turns that body into a step tree the nano agent can execute.
 
-**Filename convention:** `{category}/{slug}.md` — e.g. `identity/credential_reuse.md`.
+**Filename convention:** `{category}/{slug}.md`, for example `identity/credential_reuse.md`.
 
 ### Full example
 
@@ -109,12 +103,12 @@ Step kinds exposed by the slash syntax:
 
 | Kind | Purpose |
 |------|---------|
-| `/query` | nano search query — agent runs on open, result inlines into the case |
+| `/query` | nano search query: the agent runs it on open and the result is inlined into the case |
 | `/pivot` | Entity expansion (same primitive as PIVT) |
 | `/enrichment` | Third-party lookup (WHOIS, VT, HR, IdP, etc.) |
 | `/decision` | Human yes/no/other, with a required note on configurable options |
 | `/action` | Mutates the case or external system (assign, escalate, containment) |
-| `/review` | "Look at this" — human ticks when read |
+| `/review` | "Look at this": a human ticks it when read |
 | `/note` | Inline guidance / playbook author commentary (not executed) |
 
 A step block looks like:
@@ -130,15 +124,15 @@ The indented body is a YAML-ish param bag the renderer reads.
 
 ## Promoted playbooks
 
-Several stock playbooks are marked as **promoted** in the nano UI — they surface first in the picker because they have high attach/complete rates across deployments. Current promoted set: `credential_reuse`, `login_spray`, `malware_detection`, `ransomware_precursor`, `exposed_credential`, `phish_reported`, `bec_wire_fraud`. Promotion is a runtime stat managed by nano — it is not carried in the playbook file itself.
+Several stock playbooks are marked as **promoted** in the nano UI. They surface first in the picker. Current promoted set: `credential_reuse`, `login_spray`, `malware_detection`, `ransomware_precursor`, `exposed_credential`, `phish_reported`, `bec_wire_fraud`. Promotion is managed by nano; it is not carried in the playbook file itself.
 
 ## Contributing
 
 1. Fork this repository
-2. Add a playbook following the format above — put it in the category folder that best fits the investigation surface
+2. Add a playbook following the format above, and put it in the category folder that best fits the investigation surface
 3. Dry-run the playbook against real cases in your tenant before submitting
 4. Submit a pull request
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
